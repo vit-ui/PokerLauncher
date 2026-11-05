@@ -151,8 +151,6 @@ try {
             XeesterUpdater = $xeesterPath
             StarsCaption = $starsCaptionPath
         }
-        LoginFormTimeoutSeconds = 180
-        PostSubmitTimeoutSeconds = 30
     }
     $configJson = $config | ConvertTo-Json -Depth 5
     $temporaryConfig = "$configPath.tmp"
