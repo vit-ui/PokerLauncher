@@ -21,7 +21,7 @@ function Test-IsAdministrator {
 }
 
 # Elevate the controller once. All three applications and the login helper
-# inherit the elevated token from this process.
+# inherit its elevated token.
 if (-not (Test-IsAdministrator)) {
     try {
         $arguments = '-NoLogo -NoProfile -ExecutionPolicy Bypass -File "' + $PSCommandPath + '"'
@@ -38,105 +38,231 @@ if (-not (Test-IsAdministrator)) {
 
 New-Item -ItemType Directory -Path $logDirectory -Force | Out-Null
 
-$trackedProcessIds = [System.Collections.Generic.HashSet[int]]::new()
-$parentByProcessId = @{}
-$startTimeByProcessId = @{}
+# A Windows Job Object gives this invocation process-tree ownership. Processes
+# are created suspended, assigned to the job, and only then resumed. Therefore
+# descendants inherit job membership from the start, without polling WMI and
+# risking a missed short-lived parent process. On failure, TerminateJobObject
+# terminates all processes in this invocation while leaving unrelated apps
+# (including sessions that were already running) untouched.
+if (-not ('PokerStarsLauncherProcessJob' -as [type])) {
+    Add-Type -TypeDefinition @'
+using System;
+using System.Collections.Generic;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+using System.Text;
+
+public static class PokerStarsLauncherProcessJob {
+    private const uint CREATE_SUSPENDED = 0x00000004;
+    private const uint STARTF_USESHOWWINDOW = 0x00000001;
+    private const ushort SW_HIDE = 0;
+    private const uint WAIT_OBJECT_0 = 0x00000000;
+    private const uint WAIT_TIMEOUT = 0x00000102;
+    private const uint INFINITE = 0xFFFFFFFF;
+
+    private static readonly Dictionary<int, IntPtr> ProcessHandles = new Dictionary<int, IntPtr>();
+    private static int NextProcessHandleId = 0;
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct STARTUPINFO {
+        public uint cb;
+        public IntPtr lpReserved;
+        public IntPtr lpDesktop;
+        public IntPtr lpTitle;
+        public uint dwX;
+        public uint dwY;
+        public uint dwXSize;
+        public uint dwYSize;
+        public uint dwXCountChars;
+        public uint dwYCountChars;
+        public uint dwFillAttribute;
+        public uint dwFlags;
+        public ushort wShowWindow;
+        public ushort cbReserved2;
+        public IntPtr lpReserved2;
+        public IntPtr hStdInput;
+        public IntPtr hStdOutput;
+        public IntPtr hStdError;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct PROCESS_INFORMATION {
+        public IntPtr hProcess;
+        public IntPtr hThread;
+        public uint dwProcessId;
+        public uint dwThreadId;
+    }
+
+    [DllImport("kernel32.dll", EntryPoint = "CreateJobObjectW", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern IntPtr CreateJobObject(IntPtr jobAttributes, string name);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool AssignProcessToJobObject(IntPtr job, IntPtr process);
+
+    [DllImport("kernel32.dll", EntryPoint = "CreateProcessW", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern bool CreateProcess(
+        string applicationName,
+        StringBuilder commandLine,
+        IntPtr processAttributes,
+        IntPtr threadAttributes,
+        bool inheritHandles,
+        uint creationFlags,
+        IntPtr environment,
+        string currentDirectory,
+        ref STARTUPINFO startupInfo,
+        out PROCESS_INFORMATION processInformation);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern uint ResumeThread(IntPtr thread);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool TerminateProcess(IntPtr process, uint exitCode);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool TerminateJobObject(IntPtr job, uint exitCode);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern uint WaitForSingleObject(IntPtr handle, uint milliseconds);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool GetExitCodeProcess(IntPtr process, out uint exitCode);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool CloseHandle(IntPtr handle);
+
+    private static string LastError() {
+        return new Win32Exception(Marshal.GetLastWin32Error()).Message;
+    }
+
+    public static IntPtr Create(out string error) {
+        error = null;
+        IntPtr job = CreateJobObject(IntPtr.Zero, null);
+        if (job == IntPtr.Zero) error = "CreateJobObject failed: " + LastError();
+        return job;
+    }
+
+    public static bool StartProcess(IntPtr job, string applicationPath, string arguments,
+                                    string workingDirectory, bool hidden,
+                                    out int processId, out int processHandleId, out string error) {
+        processId = 0;
+        processHandleId = 0;
+        error = null;
+        if (job == IntPtr.Zero) {
+            error = "The process job handle is not available.";
+            return false;
+        }
+
+        STARTUPINFO startup = new STARTUPINFO();
+        startup.cb = (uint)Marshal.SizeOf(typeof(STARTUPINFO));
+        if (hidden) {
+            startup.dwFlags = STARTF_USESHOWWINDOW;
+            startup.wShowWindow = SW_HIDE;
+        }
+
+        string command = "\"" + applicationPath + "\"";
+        if (!String.IsNullOrWhiteSpace(arguments)) command += " " + arguments;
+        StringBuilder mutableCommand = new StringBuilder(command);
+        PROCESS_INFORMATION info;
+
+        bool created = CreateProcess(
+            applicationPath, mutableCommand, IntPtr.Zero, IntPtr.Zero, false,
+            CREATE_SUSPENDED, IntPtr.Zero, workingDirectory, ref startup, out info);
+        if (!created) {
+            error = "CreateProcess failed for '" + applicationPath + "': " + LastError();
+            return false;
+        }
+
+        bool resumed = false;
+        try {
+            if (!AssignProcessToJobObject(job, info.hProcess)) {
+                error = "Could not assign '" + applicationPath + "' to the launcher process job: " + LastError();
+                return false;
+            }
+
+            uint previousSuspendCount = ResumeThread(info.hThread);
+            if (previousSuspendCount == 0xFFFFFFFF) {
+                error = "Could not resume '" + applicationPath + "': " + LastError();
+                return false;
+            }
+
+            lock (ProcessHandles) {
+                NextProcessHandleId++;
+                if (NextProcessHandleId <= 0) NextProcessHandleId = 1;
+                while (ProcessHandles.ContainsKey(NextProcessHandleId)) {
+                    NextProcessHandleId++;
+                    if (NextProcessHandleId <= 0) NextProcessHandleId = 1;
+                }
+                processHandleId = NextProcessHandleId;
+                ProcessHandles.Add(processHandleId, info.hProcess);
+            }
+            processId = (int)info.dwProcessId;
+            resumed = true;
+            return true;
+        }
+        finally {
+            if (!resumed) TerminateProcess(info.hProcess, 1);
+            CloseHandle(info.hThread);
+            if (!resumed) CloseHandle(info.hProcess);
+        }
+    }
+
+    // Returns true only after the process handle is signaled. Exit code is
+    // read from the retained handle, so an immediately-exiting updater is
+    // still observed reliably even if its PID is reused later.
+    public static bool HasExited(int processHandleId, int processId, out uint exitCode, out string error) {
+        exitCode = 0;
+        error = null;
+        IntPtr process;
+        lock (ProcessHandles) {
+            if (!ProcessHandles.TryGetValue(processHandleId, out process)) {
+                error = "No retained process handle exists for process handle ID " + processHandleId + " (PID " + processId + ").";
+                return false;
+            }
+        }
+
+        uint wait = WaitForSingleObject(process, 0);
+        if (wait == WAIT_TIMEOUT) return false;
+        if (wait != WAIT_OBJECT_0) {
+            error = "WaitForSingleObject failed for PID " + processId + ": " + LastError();
+            return false;
+        }
+        if (!GetExitCodeProcess(process, out exitCode)) {
+            error = "GetExitCodeProcess failed for PID " + processId + ": " + LastError();
+            return false;
+        }
+        return true;
+    }
+
+    public static bool Terminate(IntPtr job, out string error) {
+        error = null;
+        if (job == IntPtr.Zero) return true;
+        if (!TerminateJobObject(job, 1)) {
+            error = "TerminateJobObject failed: " + LastError();
+            return false;
+        }
+        return true;
+    }
+
+    public static void CloseJob(IntPtr job) {
+        if (job != IntPtr.Zero) CloseHandle(job);
+    }
+
+    public static void CloseProcessHandles() {
+        lock (ProcessHandles) {
+            foreach (IntPtr process in ProcessHandles.Values) CloseHandle(process);
+            ProcessHandles.Clear();
+        }
+    }
+}
+'@
+}
+
+$jobHandle = [IntPtr]::Zero
 $rootProcesses = @()
+$loginProcessId = 0
 $failureMessage = $null
 $runStartedUtc = [DateTime]::UtcNow
 $runStartedUtcText = $runStartedUtc.ToString('o', [Globalization.CultureInfo]::InvariantCulture)
-
-function Add-TrackedProcess {
-    param(
-        [int]$ProcessId,
-        [int]$ParentProcessId,
-        [datetime]$StartTimeUtc = [DateTime]::MinValue
-    )
-    if ($ProcessId -le 0) { return }
-    if ($trackedProcessIds.Add($ProcessId)) {
-        $parentByProcessId[$ProcessId] = $ParentProcessId
-        $startTimeByProcessId[$ProcessId] = $StartTimeUtc
-    }
-}
-
-function Update-TrackedProcessTree {
-    try {
-        $snapshot = @(Get-CimInstance -ClassName Win32_Process -ErrorAction Stop)
-    }
-    catch {
-        Write-LauncherLog "WARNING: Could not inspect the process tree: $($_.Exception.Message)"
-        return
-    }
-
-    $changed = $true
-    while ($changed) {
-        $changed = $false
-        foreach ($item in $snapshot) {
-            $processId = [int]$item.ProcessId
-            $parentId = [int]$item.ParentProcessId
-            if ($trackedProcessIds.Contains($parentId) -and -not $trackedProcessIds.Contains($processId)) {
-                $creationUtc = [DateTime]::MinValue
-                try {
-                    if (-not [string]::IsNullOrWhiteSpace([string]$item.CreationDate)) {
-                        $creationUtc = [Management.ManagementDateTimeConverter]::ToDateTime([string]$item.CreationDate).ToUniversalTime()
-                    }
-                }
-                catch { }
-                Add-TrackedProcess -ProcessId $processId -ParentProcessId $parentId -StartTimeUtc $creationUtc
-                $changed = $true
-            }
-        }
-    }
-}
-
-function Get-TrackedProcessDepth {
-    param([int]$ProcessId)
-    $depth = 0
-    $current = $ProcessId
-    $visited = [System.Collections.Generic.HashSet[int]]::new()
-    while ($parentByProcessId.ContainsKey($current) -and $visited.Add($current)) {
-        $parent = [int]$parentByProcessId[$current]
-        if ($parent -le 0 -or -not $trackedProcessIds.Contains($parent)) { break }
-        $depth++
-        $current = $parent
-    }
-    return $depth
-}
-
-function Stop-LaunchedProcesses {
-    Write-LauncherLog 'Failure cleanup: collecting processes started by this launcher invocation.'
-    Update-TrackedProcessTree
-    $orderedProcesses = foreach ($trackedId in $trackedProcessIds) {
-        [PSCustomObject]@{ ProcessId = [int]$trackedId; Depth = (Get-TrackedProcessDepth -ProcessId ([int]$trackedId)) }
-    }
-    $processIds = @($orderedProcesses | Sort-Object -Property Depth -Descending | Select-Object -ExpandProperty ProcessId)
-
-    foreach ($processId in $processIds) {
-        try {
-            $process = Get-Process -Id $processId -ErrorAction Stop
-            if (-not $process.HasExited) {
-                $expectedStart = [datetime]$startTimeByProcessId[$processId]
-                if ($expectedStart -ne [DateTime]::MinValue) {
-                    $actualStart = $process.StartTime.ToUniversalTime()
-                    if ([Math]::Abs(($actualStart - $expectedStart).TotalSeconds) -gt 2) {
-                        Write-LauncherLog "Cleanup skipped PID $processId because its process identity changed."
-                        continue
-                    }
-                }
-                Stop-Process -Id $processId -Force -ErrorAction Stop
-                Write-LauncherLog "Terminated launched process PID $processId ($($process.ProcessName))."
-            }
-        }
-        catch {
-            if ($_.Exception.Message -match 'Cannot find a process|No process was found') {
-                Write-LauncherLog "Cleanup note: PID $processId was already gone."
-            }
-            else {
-                Write-LauncherLog "WARNING: Could not terminate PID ${processId}: $($_.Exception.Message)"
-            }
-        }
-    }
-}
 
 try {
     if (-not (Test-Path -LiteralPath $configPath -PathType Leaf)) {
@@ -144,6 +270,9 @@ try {
     }
     if (-not (Test-Path -LiteralPath $loginScript -PathType Leaf)) {
         throw "PokerStars login helper not found: $loginScript"
+    }
+    if (-not (Test-Path -LiteralPath $windowsPowerShell -PathType Leaf)) {
+        throw "Windows PowerShell executable was not found: $windowsPowerShell"
     }
 
     $config = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
@@ -163,66 +292,120 @@ try {
         }
     }
 
-    Write-LauncherLog "Launcher started elevated. Start time UTC: $runStartedUtcText"
+    $nativeError = $null
+    $jobHandle = [PokerStarsLauncherProcessJob]::Create([ref]$nativeError)
+    if ($jobHandle -eq [IntPtr]::Zero) {
+        throw "Could not create the process job used for failure cleanup: $nativeError"
+    }
 
-    # Preserve the original BAT behavior: launch in this order, without waiting
-    # for an updater to finish before starting the next application.
+    Write-LauncherLog "Launcher started elevated. Start time UTC: $runStartedUtcText"
+    Write-LauncherLog 'Failure cleanup uses a Windows Job Object. Each process is assigned while suspended before it can spawn descendants.'
+
+    # Preserve the original BAT behavior: launch these three in order, with no
+    # waiting for one updater to finish before starting the next application.
     foreach ($item in $launchItems) {
-        $process = Start-Process -FilePath $item.Path -WorkingDirectory $repoRoot -PassThru
-        $processStartUtc = [DateTime]::MinValue
-        try { $processStartUtc = $process.StartTime.ToUniversalTime() } catch { }
-        Add-TrackedProcess -ProcessId ([int]$process.Id) -ParentProcessId $PID -StartTimeUtc $processStartUtc
-        $rootProcesses += [PSCustomObject]@{ Name = $item.Name; Process = $process; Path = $item.Path }
-        Write-LauncherLog "Started $($item.Name): $($item.Path) (PID $($process.Id))."
-        Update-TrackedProcessTree
+        $processId = 0
+        $processHandleId = 0
+        $started = [PokerStarsLauncherProcessJob]::StartProcess(
+            $jobHandle, $item.Path, '', $repoRoot, $false,
+            [ref]$processId, [ref]$processHandleId, [ref]$nativeError
+        )
+        if (-not $started) {
+            throw "Could not start $($item.Name): $nativeError"
+        }
+        $rootProcesses += [PSCustomObject]@{
+            Name = $item.Name
+            ProcessId = [int]$processId
+            ProcessHandleId = [int]$processHandleId
+        }
+        Write-LauncherLog "Started $($item.Name): $($item.Path) (PID $processId)."
     }
 
     $loginArguments = '-NoLogo -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $loginScript + '" -RunStartedUtc "' + $runStartedUtcText + '"'
-    $loginProcess = Start-Process -FilePath $windowsPowerShell -ArgumentList $loginArguments `
-        -WorkingDirectory $repoRoot -WindowStyle Hidden -PassThru
-    $loginStartUtc = [DateTime]::MinValue
-    try { $loginStartUtc = $loginProcess.StartTime.ToUniversalTime() } catch { }
-    Add-TrackedProcess -ProcessId ([int]$loginProcess.Id) -ParentProcessId $PID -StartTimeUtc $loginStartUtc
-    Write-LauncherLog "Started PokerStars login helper (PID $($loginProcess.Id))."
+    $loginProcessId = 0
+    $loginProcessHandleId = 0
+    $loginStarted = [PokerStarsLauncherProcessJob]::StartProcess(
+        $jobHandle, $windowsPowerShell, $loginArguments, $repoRoot, $true,
+        [ref]$loginProcessId, [ref]$loginProcessHandleId, [ref]$nativeError
+    )
+    if (-not $loginStarted) {
+        throw "Could not start the PokerStars login helper: $nativeError"
+    }
+    Write-LauncherLog "Started PokerStars login helper (PID $loginProcessId)."
 
     while ($true) {
-        Update-TrackedProcessTree
-
         foreach ($root in $rootProcesses) {
-            $root.Process.Refresh()
-            if ($root.Process.HasExited -and $root.Process.ExitCode -ne 0) {
-                throw "$($root.Name) exited with code $($root.Process.ExitCode)."
+            [uint32]$rootExitCode = 0
+            $rootError = $null
+            $rootExited = [PokerStarsLauncherProcessJob]::HasExited(
+                [int]$root.ProcessHandleId, [int]$root.ProcessId, [ref]$rootExitCode, [ref]$rootError
+            )
+            if (-not [string]::IsNullOrWhiteSpace($rootError)) { throw $rootError }
+            if ($rootExited -and $rootExitCode -ne 0) {
+                throw "$($root.Name) exited with code $rootExitCode."
             }
         }
 
-        $loginProcess.Refresh()
-        if ($loginProcess.HasExited) { break }
+        [uint32]$loginExitCode = 0
+        $loginError = $null
+        $loginExited = [PokerStarsLauncherProcessJob]::HasExited(
+            [int]$loginProcessHandleId, [int]$loginProcessId, [ref]$loginExitCode, [ref]$loginError
+        )
+        if (-not [string]::IsNullOrWhiteSpace($loginError)) { throw $loginError }
+        if ($loginExited) {
+            if ($loginExitCode -ne 0) {
+                throw "PokerStars login helper failed with exit code $loginExitCode. See '$((Join-Path $logDirectory 'login-error.txt'))'."
+            }
+            break
+        }
         Start-Sleep -Milliseconds 300
     }
 
-    $loginProcess.Refresh()
-    if ($loginProcess.ExitCode -ne 0) {
-        throw "PokerStars login helper failed with exit code $($loginProcess.ExitCode). See '$((Join-Path $logDirectory 'login-error.txt'))'."
-    }
-
     foreach ($root in $rootProcesses) {
-        $root.Process.Refresh()
-        if ($root.Process.HasExited -and $root.Process.ExitCode -ne 0) {
-            throw "$($root.Name) exited with code $($root.Process.ExitCode)."
+        [uint32]$rootExitCode = 0
+        $rootError = $null
+        $rootExited = [PokerStarsLauncherProcessJob]::HasExited(
+            [int]$root.ProcessHandleId, [int]$root.ProcessId, [ref]$rootExitCode, [ref]$rootError
+        )
+        if (-not [string]::IsNullOrWhiteSpace($rootError)) { throw $rootError }
+        if ($rootExited -and $rootExitCode -ne 0) {
+            throw "$($root.Name) exited with code $rootExitCode."
         }
     }
 
     Write-LauncherLog 'Launcher completed successfully. Applications remain running.'
     Write-Host 'PokerStars login was submitted successfully. The applications remain running.' -ForegroundColor Green
+    [PokerStarsLauncherProcessJob]::CloseProcessHandles()
+    [PokerStarsLauncherProcessJob]::CloseJob($jobHandle)
+    $jobHandle = [IntPtr]::Zero
     exit 0
 }
 catch {
     $failureMessage = $_.Exception.Message
-    Write-LauncherLog "LAUNCHER FAILURE: $failureMessage"
-    Stop-LaunchedProcesses
+    if (Test-Path -LiteralPath $logDirectory -PathType Container) {
+        Write-LauncherLog "LAUNCHER FAILURE: $failureMessage"
+    }
+
+    $cleanupError = $null
+    if ($jobHandle -ne [IntPtr]::Zero) {
+        $terminated = [PokerStarsLauncherProcessJob]::Terminate($jobHandle, [ref]$cleanupError)
+        if ($terminated) {
+            Write-LauncherLog 'Failure cleanup: Windows terminated the entire launcher process job.'
+        }
+        else {
+            Write-LauncherLog "CRITICAL: $cleanupError"
+        }
+        [PokerStarsLauncherProcessJob]::CloseProcessHandles()
+        [PokerStarsLauncherProcessJob]::CloseJob($jobHandle)
+        $jobHandle = [IntPtr]::Zero
+    }
+
     Write-Host ''
     Write-Host "LAUNCHER FAILED: $failureMessage" -ForegroundColor Red
-    Write-Host "Processes started by this launcher were terminated. Log: $logPath" -ForegroundColor Yellow
+    if (-not [string]::IsNullOrWhiteSpace($cleanupError)) {
+        Write-Host "PROCESS CLEANUP FAILED: $cleanupError" -ForegroundColor Red
+    }
+    Write-Host "See launcher log: $logPath" -ForegroundColor Yellow
     Read-Host 'Press Enter to close' | Out-Null
     exit 1
 }

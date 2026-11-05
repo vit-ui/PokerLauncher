@@ -33,7 +33,7 @@ Use the Desktop shortcut or run `launch.bat`. Windows asks for administrator per
 
 The three application processes are started concurrently in the order above. PokerStars login-form detection waits up to 180 seconds. After the Login notification, the original login dialog must disappear within 30 seconds for the helper to report success.
 
-If an executable cannot be started, a launcher process exits with a non-zero code, or the PokerStars login helper fails, the launcher stops and terminates the processes started by that invocation, including their child processes. It does not terminate matching processes that were already running before that invocation. Failure details are written under `%LOCALAPPDATA%\PokerStarsLauncher\logs\`.
+If an executable cannot be started, a launcher process exits with a non-zero code, or the PokerStars login helper fails, the launcher stops and terminates the Windows Job Object created for that invocation. Each process is created suspended and assigned to the job before it can start, so its descendant processes inherit the same job membership. This avoids killing matching processes that were already running before the launcher started. Failure details are written under `%LOCALAPPDATA%\PokerStarsLauncher\logs\`.
 
 ## Shortcut icon
 
