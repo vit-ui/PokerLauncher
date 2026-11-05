@@ -1,53 +1,81 @@
 # PokerStarsLauncher
 
-A Windows launcher for PokerStars, Xeester, and StarsCaption. It starts the three configured executables in the same order as the original batch file, without waiting for one updater to finish before starting the next, then submits the saved PokerStars login form.
+A small Windows application that starts PokerStars, Xeester, and StarsCaption in the same order and with the same concurrent startup behavior as the original launcher, then submits the PokerStars login form.
 
-## Requirements
+The public download is a **single self-installing executable**. Users do not need to extract an archive, run a batch file, open PowerShell, install Go, or edit scripts.
 
-- Windows 10 or Windows 11.
-- Windows PowerShell 5.1 (included with Windows).
-- The three applications already installed.
-- Git is only required for development and version control; it is not required to run the launcher.
+## Download and install
 
-The launcher does not install applications or require third-party runtime tools. It requests administrator permission once; all three applications and the login helper are started from that elevated process.
+1. Open [Releases](../../releases).
+2. Download **`PokerStarsLauncher.exe`** from the latest release Assets.
+3. Run the downloaded file. On first run, it copies itself to `%LOCALAPPDATA%\Programs\PokerStarsLauncher`, installs its internal components, and opens the setup window.
+4. Enter your PokerStars username and password. Confirm or change the three application paths. The password field is masked.
+5. Select **Save**. Setup creates a Desktop shortcut and Start Menu entries.
+6. Delete the downloaded copy if you wish. The installed copy is now under your Windows profile.
 
-## Initial setup
+The application is installed per user and does not need administrator permission to install. Administrator approval is requested when the Desktop shortcut starts the three applications. The first public builds are unsigned, so Windows SmartScreen may show an unrecognized-app warning until the executable has an established reputation or is signed.
 
-1. Extract the repository to a stable folder. Do not move the folder after creating the Desktop shortcut without running setup again.
-2. Run `setup.bat`.
-3. Enter your PokerStars username and password. The three executable paths are pre-filled with the paths used by the original launcher; press Enter to accept each detected path or enter a different path.
-4. Setup creates `PokerStars Launcher.lnk` on the current user's Desktop.
+## First-run configuration
 
-The username and executable paths are stored in `%APPDATA%\PokerStarsLauncher\config.json`. The password is stored separately as a DPAPI-protected value in `%APPDATA%\PokerStarsLauncher\password.dpapi`. The password file is tied to the Windows user profile and machine; do not copy it to another computer or commit it.
+The setup window pre-fills these conventional paths and lets you confirm them or browse to different executables:
 
-Setup can be run again to change the username or executable paths. Press Enter at the password prompt to keep the existing encrypted password; enter a new password to replace it.
+| Application | Default executable |
+|---|---|
+| PokerStars updater | `C:\Program Files (x86)\PokerStars\PokerStarsUpdate.exe` |
+| Xeester updater | `C:\Program Files (x86)\Xeester\xeester-update.exe` |
+| StarsCaption | `C:\StarsCaption\StarsCaption.exe` |
 
-## Launch
+The password is stored separately from configuration using Windows DPAPI in the current Windows user context. Configuration and credentials are kept under `%APPDATA%\PokerStarsLauncher`; logs are under `%LOCALAPPDATA%\PokerStarsLauncher\logs`. They are not stored in the application installation directory or committed to Git.
 
-Use the Desktop shortcut or run `launch.bat`. Windows asks for administrator permission. After approval, the launcher:
+The setup wizard is available later from **Start Menu → PokerStarsLauncher → Configure PokerStarsLauncher**. Enter a new password to replace the saved one; leave the password blank to keep the existing value.
+
+## Launch behavior
+
+Close any existing PokerStars process first, then use the Desktop shortcut or the Start Menu launcher. The launcher refuses to start if `PokerStars.exe` is already running, because login automation must target the process created by that launch. Windows shows one UAC prompt. After approval, the application:
 
 1. Starts `PokerStarsUpdate.exe`.
 2. Starts `xeester-update.exe`.
 3. Starts `StarsCaption.exe`.
-4. Waits for the actual PokerStars login form, fills the native username and password controls, and sends the confirmed parent-dialog `WM_COMMAND / BN_CLICKED` notification.
+4. Waits for the real PokerStars login form, fills its native username and password controls, and sends the confirmed parent-dialog `WM_COMMAND / BN_CLICKED` notification.
 
-The three application processes are started concurrently in the order above. PokerStars login-form detection waits up to 180 seconds. After the Login notification, the original login dialog must disappear within 30 seconds for the helper to report success. This is a UI-submission signal; the helper does not independently inspect the authenticated lobby state.
+The three applications are started in that order without waiting for one updater to finish before starting the next. Login-form detection waits up to 180 seconds. After the Login notification, the original login dialog must disappear within 30 seconds. This confirms that the dialog accepted the submission; it does not independently prove that PokerStars authenticated the account.
 
-If an executable cannot be started, a launcher process exits with a non-zero code, or the PokerStars login helper fails, the launcher stops and terminates the Windows Job Object created for that invocation. Each process is created suspended and assigned to the job before it can start, so its descendant processes inherit the same job membership. This avoids killing matching processes that were already running before the launcher started. Failure details are written under `%LOCALAPPDATA%\PokerStarsLauncher\logs\`.
+If application startup or login submission fails, the launcher stops and terminates the processes started by that invocation, including their descendants. Processes that were already running before this launcher invocation are not placed in its Windows Job Object and are not terminated. Failure details are shown in a Windows dialog and written to `%LOCALAPPDATA%\PokerStarsLauncher\logs\launcher.log`.
 
-## Shortcut icon
+The elevated process runs under the same Windows account that approved UAC. This is required because the password is protected with that account's DPAPI context.
 
-The setup script expects the icon at `assets\PokerStarsLauncher.ico`. That file is intentionally not included in this initial build yet. Setup will create the shortcut with its default Windows icon until the ICO is added. After adding it, run `setup.bat` again to update the shortcut.
+## Updating
 
-## Project and Git conventions
+To update, download the new `PokerStarsLauncher.exe` from the latest GitHub Release and run it. It replaces the installed application files under LocalAppData while preserving configuration and the encrypted password. The Desktop and Start Menu shortcuts continue to point to the same installed path.
 
-The repository follows the project bootstrap structure and conventions used by [proinit](https://github.com/vit-ui/proinit):
+## Uninstalling
 
-- Separate scaffold, workflow, and commit-hook setup phases.
-- Conventional Commits checked by Commitizen.
-- Gitleaks on staged changes.
-- A pre-push check that blocks deletion and non-fast-forward updates to `master`.
-- Ubuntu merge-safety checks, plus Windows PowerShell syntax validation.
-- Release Please creates release pull requests from conventional commits.
+Open **Settings → Apps → Installed apps → PokerStarsLauncher → Uninstall**. The uninstaller asks whether to also remove the saved username, executable paths, and encrypted password. Choosing **No** removes the application but keeps those settings for a later reinstall. Choosing **Yes** removes them as well.
 
-The local repository is initialized on `master`. No GitHub remote is configured and no push is performed by this project bootstrap.
+## Requirements
+
+- Windows 10 or Windows 11, x64.
+- PokerStars, Xeester, and StarsCaption already installed.
+- Windows PowerShell 5.1, included with Windows.
+- A Windows account permitted to approve the UAC prompt.
+
+No Go installation, Inno Setup, separate .NET runtime, or third-party launcher dependency is required on the user's PC.
+
+## Project development
+
+The EXE is a Go Windows GUI executable. The working PowerShell implementation is embedded into it at build time and extracted into the per-user application directory at runtime. It is not a PowerShell rewrite of the existing PokerStars native login automation.
+
+Build locally from a Windows or cross-compiling Go environment:
+
+```powershell
+go test ./...
+$env:GOOS = 'windows'
+$env:GOARCH = 'amd64'
+go build -trimpath -ldflags '-s -w -H=windowsgui -X main.version=0.1.0-dev' -o PokerStarsLauncher.exe .
+```
+
+The Release Please workflow creates the release and, in a dependent Windows job in that same workflow run, builds the executable and attaches it to that GitHub Release. This avoids relying on a tag-push event created by the workflow token to trigger a separate workflow. The repository retains the `proinit` scaffold/workflow/commit conventions: Conventional Commits, Commitizen, Lefthook, Gitleaks, merge-safety checks, and Release Please. It does not create or push a remote as part of local project setup.
+
+## License and affiliation
+
+MIT. This project is not affiliated with, endorsed by, or supported by PokerStars, Xeester, or StarsCaption.
