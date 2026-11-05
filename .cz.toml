@@ -1,0 +1,12 @@
+[tool.commitizen]
+name = "cz_conventional_commits"
+tag_format = "v$version"
+version_scheme = "semver2"
+version_provider = "scm"
+update_changelog_on_bump = true
+changelog_incremental = true
+annotated_tag = true
+major_version_zero = true
+breaking_change_exclamation_in_title = true
+post_bump_hooks = []
+pre_bump_hooks = ["echo 'versionamento é feito via release-please, nao rode cz bump' >&2; exit 1"]
