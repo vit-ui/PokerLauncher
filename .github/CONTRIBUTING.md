@@ -6,7 +6,16 @@
 - Windows PowerShell 5.1 for validating and exercising the launcher scripts.
 - Commitizen (`cz`), Gitleaks, and Lefthook for the repository's local commit hooks.
 
-The launcher runtime itself does not depend on Commitizen, Gitleaks, or Lefthook.
+The launcher runtime itself does not depend on Commitizen, Gitleaks, or Lefthook. Install the development tools in the same shell environment used for Git operations (the commands below follow the tool choices in `proinit`):
+
+```bash
+uv tool install commitizen
+go install github.com/zricethezav/gitleaks/v8@v8.30.1
+go install github.com/evilmartians/lefthook@latest
+lefthook install
+```
+
+`go` and `uv` must already be installed and available on `PATH`.
 
 ## Validate PowerShell scripts
 
