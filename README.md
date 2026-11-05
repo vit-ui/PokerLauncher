@@ -31,7 +31,7 @@ Use the Desktop shortcut or run `launch.bat`. Windows asks for administrator per
 3. Starts `StarsCaption.exe`.
 4. Waits for the actual PokerStars login form, fills the native username and password controls, and sends the confirmed parent-dialog `WM_COMMAND / BN_CLICKED` notification.
 
-The three application processes are started concurrently in the order above. PokerStars login-form detection waits up to 180 seconds. After the Login notification, the original login dialog must disappear within 30 seconds for the helper to report success.
+The three application processes are started concurrently in the order above. PokerStars login-form detection waits up to 180 seconds. After the Login notification, the original login dialog must disappear within 30 seconds for the helper to report success. This is a UI-submission signal; the helper does not independently inspect the authenticated lobby state.
 
 If an executable cannot be started, a launcher process exits with a non-zero code, or the PokerStars login helper fails, the launcher stops and terminates the Windows Job Object created for that invocation. Each process is created suspended and assigned to the job before it can start, so its descendant processes inherit the same job membership. This avoids killing matching processes that were already running before the launcher started. Failure details are written under `%LOCALAPPDATA%\PokerStarsLauncher\logs\`.
 
