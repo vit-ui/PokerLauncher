@@ -13,6 +13,11 @@ password.dpapi
 *.temp
 login-error.txt
 
+# Build output
+PokerStarsLauncher.exe
+/dist/
+/out/
+
 # Windows-generated files
 Thumbs.db
 Desktop.ini

@@ -20,20 +20,11 @@ function Test-IsAdministrator {
     return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 }
 
-# Elevate the controller once. All three applications and the login helper
-# inherit its elevated token.
+# The Go application requests UAC before invoking this controller. Keeping
+# elevation here as well would create a second controller and break its error
+# reporting, so fail explicitly if the token is not elevated.
 if (-not (Test-IsAdministrator)) {
-    try {
-        $arguments = '-NoLogo -NoProfile -ExecutionPolicy Bypass -File "' + $PSCommandPath + '"'
-        Start-Process -FilePath $windowsPowerShell -ArgumentList $arguments `
-            -Verb RunAs -WorkingDirectory $repoRoot | Out-Null
-        exit 0
-    }
-    catch {
-        Write-Host "Administrator permission was not granted. Launcher cancelled. $($_.Exception.Message)" -ForegroundColor Red
-        Read-Host 'Press Enter to close' | Out-Null
-        exit 1
-    }
+    throw 'The launcher controller must be started with administrator privileges.'
 }
 
 New-Item -ItemType Directory -Path $logDirectory -Force | Out-Null
@@ -266,7 +257,7 @@ $runStartedUtcText = $runStartedUtc.ToString('o', [Globalization.CultureInfo]::I
 
 try {
     if (-not (Test-Path -LiteralPath $configPath -PathType Leaf)) {
-        throw "Configuration not found: $configPath. Run setup.bat first."
+        throw "Configuration not found: $configPath. Run Configure PokerStarsLauncher from the Start Menu first."
     }
     if (-not (Test-Path -LiteralPath $loginScript -PathType Leaf)) {
         throw "PokerStars login helper not found: $loginScript"
@@ -277,7 +268,7 @@ try {
 
     $config = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
     if ([int]$config.SchemaVersion -ne 1) {
-        throw 'Unsupported configuration schema. Run setup.bat again with this version of PokerStarsLauncher.'
+        throw 'Unsupported configuration schema. Run Configure PokerStarsLauncher from the Start Menu again.'
     }
 
     $launchItems = @(
@@ -288,8 +279,17 @@ try {
 
     foreach ($item in $launchItems) {
         if ([string]::IsNullOrWhiteSpace($item.Path) -or -not (Test-Path -LiteralPath $item.Path -PathType Leaf)) {
-            throw "Configured executable for $($item.Name) was not found: $($item.Path). Run setup.bat to correct it."
+            throw "Configured executable for $($item.Name) was not found: $($item.Path). Run Configure PokerStarsLauncher from the Start Menu to correct it."
         }
+    }
+
+    # The login helper intentionally targets only a PokerStars process created
+    # during this launcher invocation. Refuse to start if an older PokerStars
+    # process is still present, instead of waiting 180 seconds for a dialog in
+    # a process the launcher does not own.
+    $existingPokerStars = @(Get-Process -Name 'PokerStars' -ErrorAction SilentlyContinue)
+    if ($existingPokerStars.Count -gt 0) {
+        throw 'PokerStars is already running. Close every PokerStars window and process, then run the launcher again.'
     }
 
     $nativeError = $null
@@ -306,8 +306,9 @@ try {
     foreach ($item in $launchItems) {
         $processId = 0
         $processHandleId = 0
+        $applicationWorkingDirectory = Split-Path -LiteralPath $item.Path -Parent
         $started = [PokerStarsLauncherProcessJob]::StartProcess(
-            $jobHandle, $item.Path, '', $repoRoot, $false,
+            $jobHandle, $item.Path, '', $applicationWorkingDirectory, $false,
             [ref]$processId, [ref]$processHandleId, [ref]$nativeError
         )
         if (-not $started) {
@@ -321,7 +322,7 @@ try {
         Write-LauncherLog "Started $($item.Name): $($item.Path) (PID $processId)."
     }
 
-    $loginArguments = '-NoLogo -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $loginScript + '" -RunStartedUtc "' + $runStartedUtcText + '"'
+    $loginArguments = '-NoLogo -NoProfile -STA -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $loginScript + '" -RunStartedUtc "' + $runStartedUtcText + '"'
     $loginProcessId = 0
     $loginProcessHandleId = 0
     $loginStarted = [PokerStarsLauncherProcessJob]::StartProcess(
@@ -406,6 +407,5 @@ catch {
         Write-Host "PROCESS CLEANUP FAILED: $cleanupError" -ForegroundColor Red
     }
     Write-Host "See launcher log: $logPath" -ForegroundColor Yellow
-    Read-Host 'Press Enter to close' | Out-Null
     exit 1
 }

@@ -56,12 +56,12 @@ try {
     }
 
     if (-not (Test-Path -LiteralPath $configFile -PathType Leaf)) {
-        throw "Configuration file not found: $configFile. Run setup.bat first."
+        throw "Configuration file not found: $configFile. Run PokerStarsLauncher setup from the Start Menu first."
     }
     $config = Get-Content -LiteralPath $configFile -Raw | ConvertFrom-Json
     $username = [string]$config.PokerStarsUsername
     if ([string]::IsNullOrWhiteSpace($username)) {
-        throw 'PokerStars username is missing from the local configuration. Run setup.bat again.'
+        throw 'PokerStars username is missing from the local configuration. Run Configure PokerStarsLauncher from the Start Menu again.'
     }
 
     if (-not (Test-Path -LiteralPath $passwordFile -PathType Leaf)) {

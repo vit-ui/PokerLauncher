@@ -1,0 +1,434 @@
+//go:build windows
+
+package main
+
+import (
+	"errors"
+	"fmt"
+	"io/fs"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"syscall"
+	"unsafe"
+)
+
+const (
+	errorCancelled        = syscall.Errno(1223)
+	seeMaskNoCloseProcess = 0x00000040
+	swShowNormal          = 1
+	mbOK                  = 0x00000000
+	mbIconError           = 0x00000010
+	mbIconInformation     = 0x00000040
+	createNoWindow        = 0x08000000
+	tokenQuery            = 0x0008
+	tokenElevation        = 20
+)
+
+type shellExecuteInfo struct {
+	cbSize       uint32
+	fMask        uint32
+	hwnd         uintptr
+	lpVerb       *uint16
+	lpFile       *uint16
+	lpParameters *uint16
+	lpDirectory  *uint16
+	nShow        int32
+	hInstApp     uintptr
+	lpIDList     uintptr
+	lpClass      *uint16
+	hkeyClass    uintptr
+	dwHotKey     uint32
+	hIcon        uintptr
+	hProcess     uintptr
+}
+
+type tokenElevationInfo struct {
+	TokenIsElevated uint32
+}
+
+var (
+	shell32                 = syscall.NewLazyDLL("shell32.dll")
+	user32                  = syscall.NewLazyDLL("user32.dll")
+	kernel32                = syscall.NewLazyDLL("kernel32.dll")
+	procShellExecuteExW     = shell32.NewProc("ShellExecuteExW")
+	procMessageBoxW         = user32.NewProc("MessageBoxW")
+	procOpenProcessToken    = advapi32.NewProc("OpenProcessToken")
+	procGetTokenInformation = advapi32.NewProc("GetTokenInformation")
+	procWaitForSingleObject = kernel32.NewProc("WaitForSingleObject")
+	procGetExitCodeProcess  = kernel32.NewProc("GetExitCodeProcess")
+	procCloseHandle         = kernel32.NewProc("CloseHandle")
+	advapi32                = syscall.NewLazyDLL("advapi32.dll")
+)
+
+func run() error {
+	args := os.Args[1:]
+	mode := ""
+	if len(args) > 0 {
+		mode = strings.ToLower(strings.TrimSpace(args[0]))
+	}
+
+	if mode == "--launch-elevated" {
+		if !isElevated() {
+			return fmt.Errorf("the elevated launcher entry point was invoked without administrator privileges")
+		}
+		if err := runPowerShell("launch.ps1"); err != nil {
+			showMessage("PokerStarsLauncher", formatLaunchError(err), mbOK|mbIconError)
+			return nil // The elevated child already showed the user-facing error.
+		}
+		return nil
+	}
+
+	if mode != "--uninstall" {
+		switch mode {
+		case "", "--setup", "--launch":
+		default:
+			return fmt.Errorf("unknown command-line option: %s", mode)
+		}
+
+		installDir, err := installationDirectory()
+		if err != nil {
+			return err
+		}
+		if err := installOrUpdate(installDir); err != nil {
+			return err
+		}
+		targetExe := filepath.Join(installDir, "PokerStarsLauncher.exe")
+		sourceExe, err := os.Executable()
+		if err != nil {
+			return fmt.Errorf("locating the running executable: %w", err)
+		}
+		if !samePath(sourceExe, targetExe) {
+			if mode == "" {
+				if configExists() {
+					mode = "--launch"
+				} else {
+					mode = "--setup"
+				}
+			}
+			return runInstalledCopy(targetExe, mode)
+		}
+		if err := runPowerShell("register.ps1"); err != nil {
+			return fmt.Errorf("refreshing application shortcuts and uninstall registration: %w", err)
+		}
+	}
+
+	switch mode {
+	case "--setup":
+		return runPowerShell("setup.ps1")
+	case "--launch":
+		if !configExists() {
+			return runPowerShell("setup.ps1")
+		}
+		return launchElevated()
+	case "--uninstall":
+		return runPowerShell("uninstall.ps1")
+	case "", "--help", "-h", "/?":
+		if !configExists() {
+			return runPowerShell("setup.ps1")
+		}
+		return launchElevated()
+	default:
+		return fmt.Errorf("unknown command-line option: %s", mode)
+	}
+}
+
+func runInstalledCopy(executable, argument string) error {
+	command := exec.Command(executable, argument)
+	command.Dir = filepath.Dir(executable)
+	command.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: createNoWindow}
+	if err := command.Start(); err != nil {
+		return fmt.Errorf("starting the installed application: %w", err)
+	}
+	return command.Process.Release()
+}
+
+func installationDirectory() (string, error) {
+	localAppData := os.Getenv("LOCALAPPDATA")
+	if strings.TrimSpace(localAppData) == "" {
+		return "", fmt.Errorf("Windows did not provide LOCALAPPDATA for this user profile")
+	}
+	return filepath.Join(localAppData, "Programs", "PokerStarsLauncher"), nil
+}
+
+func configExists() bool {
+	appData := os.Getenv("APPDATA")
+	if appData == "" {
+		return false
+	}
+	info, err := os.Stat(filepath.Join(appData, "PokerStarsLauncher", "config.json"))
+	return err == nil && !info.IsDir()
+}
+
+func installOrUpdate(installDir string) error {
+	if err := os.MkdirAll(installDir, 0755); err != nil {
+		return fmt.Errorf("creating the per-user installation directory: %w", err)
+	}
+
+	sourceExe, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("locating the running executable: %w", err)
+	}
+	sourceExe, _ = filepath.Abs(sourceExe)
+	targetExe := filepath.Join(installDir, "PokerStarsLauncher.exe")
+	if !samePath(sourceExe, targetExe) {
+		if err := copyFileAtomically(sourceExe, targetExe); err != nil {
+			return fmt.Errorf("installing PokerStarsLauncher.exe: %w", err)
+		}
+	}
+
+	for _, directory := range []string{"scripts", "assets"} {
+		if err := extractEmbeddedDirectory(directory, installDir); err != nil {
+			return err
+		}
+	}
+
+	versionPath := filepath.Join(installDir, "version.txt")
+	if err := os.WriteFile(versionPath, []byte(version+"\r\n"), 0644); err != nil {
+		return fmt.Errorf("writing application version: %w", err)
+	}
+	return nil
+}
+
+func extractEmbeddedDirectory(directory, destinationRoot string) error {
+	return fs.WalkDir(embeddedResources, directory, func(sourcePath string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		relative := strings.TrimPrefix(sourcePath, directory)
+		relative = strings.TrimPrefix(relative, "/")
+		target := filepath.Join(destinationRoot, directory, filepath.FromSlash(relative))
+		if entry.IsDir() {
+			if err := os.MkdirAll(target, 0755); err != nil {
+				return fmt.Errorf("creating resource directory %s: %w", target, err)
+			}
+			return nil
+		}
+		data, err := embeddedResources.ReadFile(sourcePath)
+		if err != nil {
+			return fmt.Errorf("reading embedded resource %s: %w", sourcePath, err)
+		}
+		if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
+			return fmt.Errorf("creating resource directory for %s: %w", target, err)
+		}
+		if err := os.WriteFile(target, data, 0644); err != nil {
+			return fmt.Errorf("extracting embedded resource %s: %w", sourcePath, err)
+		}
+		return nil
+	})
+}
+
+func copyFileAtomically(source, destination string) error {
+	input, err := os.Open(source)
+	if err != nil {
+		return err
+	}
+	defer input.Close()
+
+	output, err := os.CreateTemp(filepath.Dir(destination), ".PokerStarsLauncher-*.tmp")
+	if err != nil {
+		return err
+	}
+	temporary := output.Name()
+	defer os.Remove(temporary)
+
+	if _, err := input.Seek(0, 0); err != nil {
+		output.Close()
+		return err
+	}
+	if _, err := output.ReadFrom(input); err != nil {
+		output.Close()
+		return err
+	}
+	if err := output.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(temporary, 0755); err != nil {
+		return err
+	}
+	if err := os.Rename(temporary, destination); err != nil {
+		return err
+	}
+	return nil
+}
+
+func samePath(left, right string) bool {
+	left = filepath.Clean(left)
+	right = filepath.Clean(right)
+	return strings.EqualFold(left, right)
+}
+
+func launchElevated() error {
+	if isElevated() {
+		return runPowerShell("launch.ps1")
+	}
+
+	executable, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("locating the installed executable: %w", err)
+	}
+	if err := shellExecuteWait(executable, "--launch-elevated", filepath.Dir(executable), "runas"); err != nil {
+		if errors.Is(err, errorCancelled) {
+			showMessage("PokerStarsLauncher", "Administrator approval was cancelled. No applications were started.", mbOK|mbIconInformation)
+			return nil
+		}
+		return fmt.Errorf("requesting administrator permission: %w", err)
+	}
+	return nil
+}
+
+func shellExecuteWait(file, parameters, workingDirectory, verb string) error {
+	verbPtr, err := syscall.UTF16PtrFromString(verb)
+	if err != nil {
+		return err
+	}
+	filePtr, err := syscall.UTF16PtrFromString(file)
+	if err != nil {
+		return err
+	}
+	parametersPtr, err := syscall.UTF16PtrFromString(parameters)
+	if err != nil {
+		return err
+	}
+	directoryPtr, err := syscall.UTF16PtrFromString(workingDirectory)
+	if err != nil {
+		return err
+	}
+
+	info := shellExecuteInfo{
+		cbSize:       uint32(unsafe.Sizeof(shellExecuteInfo{})),
+		fMask:        seeMaskNoCloseProcess,
+		lpVerb:       verbPtr,
+		lpFile:       filePtr,
+		lpParameters: parametersPtr,
+		lpDirectory:  directoryPtr,
+		nShow:        swShowNormal,
+	}
+	result, _, callErr := procShellExecuteExW.Call(uintptr(unsafe.Pointer(&info)))
+	if result == 0 {
+		if callErr != syscall.Errno(0) {
+			return callErr
+		}
+		return syscall.GetLastError()
+	}
+	if info.hProcess == 0 {
+		return fmt.Errorf("Windows started the elevated process but did not return a process handle")
+	}
+	defer closeHandle(info.hProcess)
+
+	waitResult, _, waitErr := procWaitForSingleObject.Call(info.hProcess, ^uintptr(0))
+	if uint32(waitResult) != 0 {
+		if waitErr != syscall.Errno(0) {
+			return fmt.Errorf("waiting for the elevated launcher: %w", waitErr)
+		}
+		return fmt.Errorf("waiting for the elevated launcher returned status 0x%x", waitResult)
+	}
+
+	var exitCode uint32
+	ok, _, exitErr := procGetExitCodeProcess.Call(info.hProcess, uintptr(unsafe.Pointer(&exitCode)))
+	if ok == 0 {
+		if exitErr != syscall.Errno(0) {
+			return fmt.Errorf("reading the elevated launcher exit code: %w", exitErr)
+		}
+		return syscall.GetLastError()
+	}
+	if exitCode != 0 {
+		return fmt.Errorf("the elevated launcher exited with code %d", exitCode)
+	}
+	return nil
+}
+
+func isElevated() bool {
+	var token syscall.Token
+	process := syscall.Handle(^uintptr(0)) // GetCurrentProcess pseudo-handle (-1).
+	result, _, _ := procOpenProcessToken.Call(uintptr(process), tokenQuery, uintptr(unsafe.Pointer(&token)))
+	if result == 0 {
+		return false
+	}
+	defer token.Close()
+
+	var elevation tokenElevationInfo
+	var returned uint32
+	result, _, _ = procGetTokenInformation.Call(
+		uintptr(token), tokenElevation,
+		uintptr(unsafe.Pointer(&elevation)),
+		unsafe.Sizeof(elevation), uintptr(unsafe.Pointer(&returned)),
+	)
+	return result != 0 && elevation.TokenIsElevated != 0
+}
+
+func closeHandle(handle uintptr) {
+	if handle != 0 {
+		procCloseHandle.Call(handle)
+	}
+}
+
+func runPowerShell(scriptName string) error {
+	executable, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("locating the installed application: %w", err)
+	}
+	scriptPath := filepath.Join(filepath.Dir(executable), "scripts", scriptName)
+	if _, err := os.Stat(scriptPath); err != nil {
+		return fmt.Errorf("required application component is missing (%s): %w", scriptName, err)
+	}
+
+	powerShell := filepath.Join(os.Getenv("SystemRoot"), "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
+	command := exec.Command(powerShell,
+		"-NoLogo", "-NoProfile", "-STA", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden",
+		"-File", scriptPath,
+	)
+	command.Dir = filepath.Dir(executable)
+	command.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: createNoWindow}
+	command.Env = append(os.Environ(), fmt.Sprintf("POKERSTARSL_PARENT_PID=%d", os.Getpid()))
+	output, err := command.CombinedOutput()
+	if err != nil {
+		trimmed := strings.TrimSpace(string(output))
+		if trimmed != "" {
+			return fmt.Errorf("%s failed: %w\n%s", scriptName, err, trimmed)
+		}
+		return fmt.Errorf("%s failed: %w", scriptName, err)
+	}
+	return nil
+}
+
+func formatLaunchError(err error) string {
+	message := "The launcher stopped because an error occurred."
+	logDirectory := filepath.Join(os.Getenv("LOCALAPPDATA"), "PokerStarsLauncher", "logs")
+	logPath := filepath.Join(logDirectory, "launcher.log")
+	for _, item := range []struct {
+		path  string
+		label string
+		lines int
+	}{
+		{path: logPath, label: "Launcher log", lines: 18},
+		{path: filepath.Join(logDirectory, "login-error.txt"), label: "PokerStars login error", lines: 12},
+	} {
+		data, readErr := os.ReadFile(item.path)
+		if readErr != nil {
+			continue
+		}
+		lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+		start := len(lines) - item.lines
+		if start < 0 {
+			start = 0
+		}
+		message += "\r\n\r\n" + item.label + ":\r\n" + strings.Join(lines[start:], "\r\n")
+	}
+	message += "\r\n\r\nDetails: " + logPath
+	if err != nil {
+		message += "\r\n\r\n" + err.Error()
+	}
+	return message
+}
+
+func showFatal(err error) {
+	showMessage("PokerStarsLauncher", err.Error(), mbOK|mbIconError)
+}
+
+func showMessage(title, message string, flags uintptr) {
+	titlePtr, _ := syscall.UTF16PtrFromString(title)
+	messagePtr, _ := syscall.UTF16PtrFromString(message)
+	procMessageBoxW.Call(0, uintptr(unsafe.Pointer(messagePtr)), uintptr(unsafe.Pointer(titlePtr)), flags)
+}
