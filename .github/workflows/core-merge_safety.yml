@@ -8,27 +8,45 @@ concurrency:
 jobs:
   core-merge_safety:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           fetch-depth: 0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.3'
+          check-latest: false
       - run: git symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/master
       - run: pipx install commitizen
       - run: go install github.com/zricethezav/gitleaks/v8@v8.30.1
       - run: echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
       - run: if git grep -n -E '^(<<<<<<<|=======|>>>>>>>)'; then exit 1; fi
       - run: cz check --rev-range HEAD~1..HEAD
+      - run: go test ./...
+      - run: go vet ./...
       - run: gitleaks git .
 
-  windows-powershell:
+  windows-validation:
     runs-on: windows-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Validate PowerShell syntax and project files
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.3'
+          check-latest: false
+      - name: Validate Windows PowerShell and embedded native declarations
         shell: powershell
         run: ./tests/Validate-Project.ps1
+      - name: Test and vet Go application
+        shell: powershell
+        run: |
+          go test ./...
+          go vet ./...
+      - name: Cross-build Windows GUI executable
+        shell: powershell
+        run: go build -trimpath -ldflags '-s -w -H=windowsgui -X main.version=ci' -o "$env:RUNNER_TEMP\PokerStarsLauncher.exe" .

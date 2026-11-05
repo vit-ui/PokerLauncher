@@ -6,9 +6,54 @@ permissions:
   contents: write
   pull-requests: write
 jobs:
-  core-release_pr:
+  release-please:
     runs-on: ubuntu-latest
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+      version: ${{ steps.release.outputs.version }}
     steps:
-      - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+      - id: release
+        uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
         with:
           release-type: simple
+
+  windows-x64-release:
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true'
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name }}
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.3'
+          check-latest: false
+      - name: Validate Go and PowerShell sources
+        shell: powershell
+        run: |
+          go test ./...
+          go vet ./...
+          ./tests/Validate-Project.ps1
+      - name: Build self-installing executable
+        shell: bash
+        run: |
+          VERSION='${{ needs.release-please.outputs.version }}'
+          go build -trimpath -ldflags "-s -w -H=windowsgui -X main.version=${VERSION}" -o PokerStarsLauncher.exe .
+          if [ ! -s PokerStarsLauncher.exe ]; then
+            echo '::error::PokerStarsLauncher.exe was not generated.'
+            exit 1
+          fi
+          sha256sum PokerStarsLauncher.exe > SHA256SUMS
+      - name: Attach application to GitHub Release
+        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
+        with:
+          tag_name: ${{ needs.release-please.outputs.tag_name }}
+          files: |
+            PokerStarsLauncher.exe
+            SHA256SUMS
+          fail_on_unmatched_files: true
+          make_latest: true
