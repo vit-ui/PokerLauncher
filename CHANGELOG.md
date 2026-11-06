@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here. Release Please updates this file from Conventional Commit messages.
 
+## [1.0.1](https://github.com/vit-ui/PokerStarsLauncher/compare/v1.0.0...v1.0.1) (2026-11-06)
+
+
+### Bug Fixes
+
+* show interactive setup and uninstall dialogs ([144705d](https://github.com/vit-ui/PokerStarsLauncher/commit/144705dac8360b8bfc14220ade99ddba8f752615))
+
 ## 1.0.0 (2026-11-05)
 
 
