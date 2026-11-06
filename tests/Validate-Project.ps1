@@ -155,12 +155,12 @@ if ($job -eq [IntPtr]::Zero) {
 }
 try {
     $cmd = Join-Path $env:SystemRoot 'System32\cmd.exe'
-    $pid = 0
+    $childProcessId = 0
     $handleId = 0
     $startError = $null
     $started = [PokerStarsLauncherProcessJob]::StartProcess(
         $job, $cmd, '/c exit 0', $env:TEMP, $false,
-        [ref]$pid, [ref]$handleId, [ref]$startError
+        [ref]$childProcessId, [ref]$handleId, [ref]$startError
     )
     if (-not $started) {
         throw "Windows Job Object runtime test could not start its short-lived child: $startError"
@@ -172,7 +172,7 @@ try {
     while ((Get-Date) -lt $deadline) {
         $processError = $null
         $exited = [PokerStarsLauncherProcessJob]::HasExited(
-            $handleId, $pid, [ref]$exitCode, [ref]$processError
+            $handleId, $childProcessId, [ref]$exitCode, [ref]$processError
         )
         if (-not [string]::IsNullOrWhiteSpace($processError)) {
             throw "Windows Job Object runtime test could not inspect its child: $processError"
