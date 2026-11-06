@@ -1,5 +1,6 @@
 param(
-    [Parameter(Mandatory = $true)][string]$Path
+    [Parameter(Mandatory = $true)][string]$Path,
+    [uri]$SourceUrl = 'https://github.com/vit-ui/PokerStarsLauncher/releases/latest/download/PokerStarsLauncher.exe'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -45,3 +46,4 @@ if (-not (Test-Path -LiteralPath $artifact -PathType Leaf) -or
     throw 'The executable was removed or changed during scanning. Release upload is blocked.'
 }
 Write-Host "Defender release scan passed. SHA256: $before"
+& (Join-Path $PSScriptRoot 'Check-Download.ps1') -Path $artifact -ExpectedSha256 $before -SourceUrl $SourceUrl

@@ -60,7 +60,11 @@ jobs:
       - name: Scan release executable with Microsoft Defender
         shell: powershell
         timeout-minutes: 5
-        run: ./tests/Scan-Release.ps1 -Path ./PokerStarsLauncher.exe
+        env:
+          RELEASE_TAG: ${{ needs.release-please.outputs.tag_name }}
+        run: |
+          $sourceUrl = "https://github.com/$env:GITHUB_REPOSITORY/releases/download/$env:RELEASE_TAG/PokerStarsLauncher.exe"
+          ./tests/Scan-Release.ps1 -Path ./PokerStarsLauncher.exe -SourceUrl $sourceUrl
       - name: Attach application to GitHub Release
         uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
         with:
@@ -70,3 +74,12 @@ jobs:
             SHA256SUMS
           fail_on_unmatched_files: true
           make_latest: true
+      - name: Verify published Windows download
+        shell: powershell
+        timeout-minutes: 5
+        env:
+          RELEASE_TAG: ${{ needs.release-please.outputs.tag_name }}
+        run: |
+          $expected = (Get-FileHash -LiteralPath ./PokerStarsLauncher.exe -Algorithm SHA256).Hash
+          $downloadUrl = "https://github.com/$env:GITHUB_REPOSITORY/releases/download/$env:RELEASE_TAG/PokerStarsLauncher.exe"
+          ./tests/Check-Download.ps1 -DownloadUrl $downloadUrl -ExpectedSha256 $expected
