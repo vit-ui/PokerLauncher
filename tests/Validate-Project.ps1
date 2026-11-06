@@ -145,4 +145,63 @@ if ($unexpectedUserLaunchers.Count -gt 0) {
     throw 'Legacy batch entry points must not be shipped in the self-installing application repository.'
 }
 
-Write-Host ("Validated Windows PowerShell 5.1 syntax and {0} embedded C# declarations across {1} scripts, then checked required project files." -f $csharpTypesCompiled, $scriptFiles.Count)
+# Runtime smoke test the same native Windows Job Object wrapper used by
+# launch.ps1. This catches P/Invoke/signature and process-assignment failures
+# that parsing and Add-Type compilation cannot detect.
+$jobError = $null
+$job = [PokerStarsLauncherProcessJob]::Create([ref]$jobError)
+if ($job -eq [IntPtr]::Zero) {
+    throw "Windows Job Object runtime test could not create a job: $jobError"
+}
+try {
+    $cmd = Join-Path $env:SystemRoot 'System32\cmd.exe'
+    $pid = 0
+    $handleId = 0
+    $startError = $null
+    $started = [PokerStarsLauncherProcessJob]::StartProcess(
+        $job, $cmd, '/c exit 0', $env:TEMP, $false,
+        [ref]$pid, [ref]$handleId, [ref]$startError
+    )
+    if (-not $started) {
+        throw "Windows Job Object runtime test could not start its short-lived child: $startError"
+    }
+
+    $deadline = (Get-Date).AddSeconds(10)
+    $exited = $false
+    [uint32]$exitCode = 0
+    while ((Get-Date) -lt $deadline) {
+        $processError = $null
+        $exited = [PokerStarsLauncherProcessJob]::HasExited(
+            $handleId, $pid, [ref]$exitCode, [ref]$processError
+        )
+        if (-not [string]::IsNullOrWhiteSpace($processError)) {
+            throw "Windows Job Object runtime test could not inspect its child: $processError"
+        }
+        if ($exited) { break }
+        Start-Sleep -Milliseconds 100
+    }
+    if (-not $exited -or $exitCode -ne 0) {
+        throw "Windows Job Object runtime test child did not exit successfully (exited=$exited, exitCode=$exitCode)."
+    }
+}
+finally {
+    [PokerStarsLauncherProcessJob]::CloseProcessHandles()
+    [PokerStarsLauncherProcessJob]::CloseJob($job)
+}
+
+# Guard the uninstall contract: the app and shortcuts are removed, user data
+# is optional, and deferred cleanup waits until the parent launcher exits.
+$uninstallSource = Get-Content -LiteralPath (Join-Path $scriptDirectory 'uninstall.ps1') -Raw
+foreach ($requiredPattern in @(
+    'DialogResult]::Cancel',
+    '$removeUserData = $choice -eq [System.Windows.Forms.DialogResult]::Yes',
+    'if ($RemoveUserData)',
+    '$parent.WaitForExit()',
+    'Remove-Item -LiteralPath $ApplicationDirectory -Recurse -Force'
+)) {
+    if ($uninstallSource -notmatch [regex]::Escape($requiredPattern)) {
+        throw "Uninstall behavior regression: expected '$requiredPattern' in scripts/uninstall.ps1."
+    }
+}
+
+Write-Host ("Validated Windows PowerShell 5.1 syntax, cmdlet parameter sets, {0} embedded C# declarations, a live Windows Job Object child process, uninstall behavior, and required project files across {1} scripts." -f $csharpTypesCompiled, $scriptFiles.Count)
