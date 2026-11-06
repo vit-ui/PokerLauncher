@@ -42,6 +42,58 @@ foreach ($file in $scriptFiles) {
         }
     }
 
+    # Validate named cmdlet parameters against the actual Windows PowerShell
+    # 5.1 parameter sets. Parsing alone accepts invalid combinations such as
+    # Split-Path -LiteralPath <value> -Parent.
+    $commands = $ast.FindAll({
+        param($node)
+        $node -is [System.Management.Automation.Language.CommandAst]
+    }, $true)
+    foreach ($command in $commands) {
+        $commandName = $command.GetCommandName()
+        if ([string]::IsNullOrWhiteSpace($commandName)) { continue }
+
+        $resolved = Get-Command -Name $commandName -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+        if ($null -eq $resolved -or $resolved.CommandType -notin @('Cmdlet', 'Alias')) { continue }
+        if ($resolved.CommandType -eq 'Alias') {
+            $resolved = Get-Command -Name $resolved.ResolvedCommandName -ErrorAction SilentlyContinue |
+                Select-Object -First 1
+        }
+        if ($null -eq $resolved -or $resolved.CommandType -ne 'Cmdlet') { continue }
+
+        $parameterNames = @($command.CommandElements |
+            Where-Object { $_ -is [System.Management.Automation.Language.CommandParameterAst] } |
+            ForEach-Object { $_.ParameterName })
+        if ($parameterNames.Count -eq 0) { continue }
+
+        $metadata = $resolved.Parameters
+        $canonicalNames = @()
+        foreach ($parameterName in $parameterNames) {
+            $matches = @($metadata.Keys | Where-Object {
+                $_ -eq $parameterName -or $_.StartsWith($parameterName, [StringComparison]::OrdinalIgnoreCase)
+            })
+            if ($matches.Count -ne 1) {
+                $parseFailures += ('{0}:{1}: {2} has an unknown or ambiguous parameter -{3}.' -f $file.FullName, $command.Extent.StartLineNumber, $commandName, $parameterName)
+                continue
+            }
+            $canonicalNames += $matches[0]
+        }
+
+        if ($canonicalNames.Count -ne $parameterNames.Count) { continue }
+        $compatibleSet = $false
+        foreach ($parameterSet in $resolved.ParameterSets) {
+            $setNames = @($parameterSet.Parameters | ForEach-Object { $_.Name })
+            if (@($canonicalNames | Where-Object { $_ -notin $setNames }).Count -eq 0) {
+                $compatibleSet = $true
+                break
+            }
+        }
+        if (-not $compatibleSet) {
+            $parseFailures += ('{0}:{1}: {2} uses named parameters that do not belong to a common Windows PowerShell 5.1 parameter set: {3}.' -f $file.FullName, $command.Extent.StartLineNumber, $commandName, (($parameterNames | ForEach-Object { "-$_" }) -join ' '))
+        }
+    }
+
     # The launch/login scripts embed C# native API declarations in here-strings.
     # The uninstall script also carries PowerShell source as a here-string; only
     # compile blocks that are recognizably C# declarations.
