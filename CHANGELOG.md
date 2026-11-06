@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here. Release Please updates this file from Conventional Commit messages.
 
+## [1.0.6](https://github.com/vit-ui/PokerStarsLauncher/compare/v1.0.5...v1.0.6) (2026-11-06)
+
+
+### Bug Fixes
+
+* restrict process inspection to owned jobs and scan release executables ([cccae32](https://github.com/vit-ui/PokerStarsLauncher/commit/cccae32760110edc41188bea3adcfa1fe0e6bd6a))
+
 ## [1.0.5](https://github.com/vit-ui/PokerStarsLauncher/compare/v1.0.4...v1.0.5) (2026-11-06)
 
 
