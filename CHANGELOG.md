@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here. Release Please updates this file from Conventional Commit messages.
 
+## [1.0.10](https://github.com/vit-ui/PokerStarsLauncher/compare/v1.0.9...v1.0.10) (2026-11-06)
+
+
+### Bug Fixes
+
+* validate Windows download security before releasing ([c812a4a](https://github.com/vit-ui/PokerStarsLauncher/commit/c812a4a4bbf20691888d26dc5d593a0dc57f6241))
+
 ## [1.0.9](https://github.com/vit-ui/PokerStarsLauncher/compare/v1.0.8...v1.0.9) (2026-11-06)
 
 
