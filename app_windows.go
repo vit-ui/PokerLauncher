@@ -375,12 +375,21 @@ func runPowerShell(scriptName string) error {
 	}
 
 	powerShell := filepath.Join(os.Getenv("SystemRoot"), "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
-	command := exec.Command(powerShell,
-		"-NoLogo", "-NoProfile", "-STA", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden",
-		"-File", scriptPath,
-	)
+	// Setup and uninstall display Windows Forms dialogs. Starting those
+	// PowerShell processes as hidden/no-console processes can suppress their
+	// interactive UI, so only background scripts use the hidden startup flags.
+	interactive := scriptName == "setup.ps1" || scriptName == "uninstall.ps1"
+	arguments := []string{"-NoLogo", "-NoProfile", "-STA", "-ExecutionPolicy", "Bypass"}
+	if !interactive {
+		arguments = append(arguments, "-WindowStyle", "Hidden")
+	}
+	arguments = append(arguments, "-File", scriptPath)
+
+	command := exec.Command(powerShell, arguments...)
 	command.Dir = filepath.Dir(executable)
-	command.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: createNoWindow}
+	if !interactive {
+		command.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: createNoWindow}
+	}
 	command.Env = append(os.Environ(), fmt.Sprintf("POKERSTARSL_PARENT_PID=%d", os.Getpid()))
 	output, err := command.CombinedOutput()
 	if err != nil {
