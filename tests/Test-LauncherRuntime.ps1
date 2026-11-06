@@ -6,6 +6,7 @@ $testRoot = Join-Path $repoRoot ('out\runtime-' + [Guid]::NewGuid().ToString('N'
 New-Item -ItemType Directory -Path $testRoot -Force | Out-Null
 $jobs = @()
 $outsideProcess = $null
+$trackedRoots = @()
 
 function Assert-True {
     param([bool]$Condition, [string]$Message)
@@ -61,7 +62,7 @@ function Start-TestRoot {
         [ref]$childId, [ref]$handleId, [ref]$startError
     )
     Assert-True $started "Could not start test root: $startError"
-    return [PSCustomObject]@{
+    $root = [PSCustomObject]@{
         Name = 'Test updater'
         ProcessId = $childId
         ProcessHandleId = $handleId
@@ -69,7 +70,11 @@ function Start-TestRoot {
         IsUpdater = $IsUpdater
         ExitObservedAt = -1.0
         HandoffLogged = $false
+        ApplicationProcess = $null
+        ClosedNormally = $false
     }
+    $script:trackedRoots += $root
+    return $root
 }
 
 function Wait-TestRootExit {
@@ -125,7 +130,20 @@ public static class PSLRuntimeFixture {
                 return 2;
             }
         }
-        if (args.Length == 0 || args[0] == "sleep") { Thread.Sleep(60000); return 0; }
+        if (args.Length == 0 || args[0] == "sleep") {
+            string root = Environment.GetEnvironmentVariable("PSL_TEST_CASE_ROOT");
+            string name = Path.GetFileName(path);
+            Stopwatch timer = Stopwatch.StartNew();
+            while (timer.ElapsedMilliseconds < 60000) {
+                if (!String.IsNullOrEmpty(root)) {
+                    if (File.Exists(Path.Combine(root, "close0-" + name))) return 0;
+                    if (File.Exists(Path.Combine(root, "close7-" + name))) return 7;
+                }
+                Thread.Sleep(50);
+            }
+            return 0;
+        }
+        if (args[0] == "duration") { Thread.Sleep(Int32.Parse(args[1])); return Int32.Parse(args[2]); }
         if (args[0] == "exit") return Int32.Parse(args[1]);
         if (args[0] == "handoff") {
             Start(args[1], "sleep");
@@ -176,16 +194,30 @@ public static class PSLRuntimeFixture {
         $failed = Start-TestRoot $failedJob "exit $code" $appExe
         Wait-TestRootExit $failed $code
         Assert-True (-not (Test-LauncherApplication $failed $failedJob 0)) 'An unrelated app must not establish readiness.'
-        Assert-Throws { Test-LauncherApplication $failed $failedJob 31 } "*exited with code $code*not running*"
+        Assert-Throws { Test-LauncherApplication $failed $failedJob 31 } "*exited with code $code*did not start*"
     }
     $wrongPath = Join-Path $testRoot 'other\PSLRuntimeApp.exe'
     $wrongRoot = Start-TestRoot $handoffJob 'exit 2' $wrongPath
     Wait-TestRootExit $wrongRoot 2
     Assert-True (-not (Test-LauncherApplication $wrongRoot $handoffJob 0)) 'Same-name process at a different path must not establish readiness.'
-    Assert-Throws { Test-LauncherApplication $wrongRoot $handoffJob 31 } '*not running*'
+    Assert-Throws { Test-LauncherApplication $wrongRoot $handoffJob 31 } '*did not start*'
     $captionRoot = Start-TestRoot $handoffJob 'exit 7' $appExe $false
     Wait-TestRootExit $captionRoot 7
     Assert-Throws { Test-LauncherApplication $captionRoot $handoffJob 0 } '*exited with code 7*'
+
+    # A successful handoff stays successful after a normal app close, while
+    # an application crash after handoff must still fail.
+    foreach ($exitCode in @(0, 7)) {
+        $closeJob = New-TestJob
+        $closing = Start-TestRoot $closeJob "duration 2000 $exitCode" $testExe
+        Assert-True (Test-LauncherApplication $closing $closeJob 0) 'Expected to observe application startup before its close.'
+        Wait-TestRootExit $closing $exitCode
+        if ($exitCode -eq 0) {
+            Assert-True (Test-LauncherApplication $closing $closeJob 31) 'A normal close after confirmed startup must not fail the updater handoff.'
+            Assert-True $closing.ClosedNormally 'Expected a normal-close state after application exit zero.'
+        }
+        else { Assert-Throws { Test-LauncherApplication $closing $closeJob 31 } '*exited unexpectedly with code 7*' }
+    }
 
     # Failed logging must not throw out of the launcher's failure cleanup.
     $logPath = $testRoot # A directory cannot be opened as a log file.
@@ -226,8 +258,8 @@ public static class PSLRuntimeFixture {
     $testController = $testController.Replace("-Name 'PokerStars' -ErrorAction SilentlyContinue)",
         "-Name 'PokerStars' -ErrorAction SilentlyContinue | Where-Object { `$_.Path -and `$_.Path.StartsWith(`$env:PSL_TEST_CASE_ROOT, [StringComparison]::OrdinalIgnoreCase) })")
     $testController = $testController.Replace('[int]$HandoffTimeoutSeconds = 30', '[int]$HandoffTimeoutSeconds = 1')
-    $testController = $testController.Replace('$startupTimeoutSeconds = 240', '$startupTimeoutSeconds = 10')
-    foreach ($scenario in @('success', 'already-running', 'start-failure', 'updater-failure', 'login-failure', 'hung-helper')) {
+    $testController = $testController.Replace('$startupTimeoutSeconds = 240', '$startupTimeoutSeconds = 15')
+    foreach ($scenario in @('success', 'already-running', 'companion-close', 'pokerstars-close', 'all-close', 'pokerstars-crash', 'start-failure', 'updater-failure', 'login-failure', 'hung-helper')) {
         $caseRoot = Join-Path $testRoot ($scenario + '-' + [char]0x00E9)
         $scriptDir = Join-Path $caseRoot 'scripts'
         $appsDir = Join-Path $caseRoot 'apps'
@@ -252,6 +284,25 @@ try {
     if (-not [PokerStarsLauncherProcessJob]::IsRunningInJob($job, $self, $null)) { throw 'Login helper is not in the controller job.' }
 }
 finally { $self.Dispose(); [PokerStarsLauncherProcessJob]::CloseJob($job) }
+if ($env:PSL_TEST_SCENARIO -in @('companion-close', 'pokerstars-close', 'all-close', 'pokerstars-crash')) {
+    $log = Join-Path $env:LOCALAPPDATA 'PokerStarsLauncher\logs\launcher.log'
+    $timer = [Diagnostics.Stopwatch]::StartNew()
+    while (@(Select-String -LiteralPath $log -Pattern 'Confirmed application startup:').Count -lt 3) {
+        if ($timer.Elapsed.TotalSeconds -gt 8) { throw 'Did not observe all fixture applications starting.' }
+        Start-Sleep -Milliseconds 50
+    }
+    if ($env:PSL_TEST_SCENARIO -in @('companion-close', 'all-close')) {
+        foreach ($name in @('xeester.exe', 'StarsCaption.exe')) {
+            [IO.File]::WriteAllText((Join-Path $env:PSL_TEST_CASE_ROOT ('close0-' + $name)), '')
+        }
+    }
+    if ($env:PSL_TEST_SCENARIO -in @('pokerstars-close', 'all-close', 'pokerstars-crash')) {
+        $code = if ($env:PSL_TEST_SCENARIO -eq 'pokerstars-crash') { '7' } else { '0' }
+        [IO.File]::WriteAllText((Join-Path $env:PSL_TEST_CASE_ROOT ('close' + $code + '-PokerStars.exe')), '')
+        Start-Sleep -Seconds 30
+    }
+    Start-Sleep -Milliseconds 1500
+}
 if ($env:PSL_TEST_SCENARIO -eq 'hung-helper') { Start-Sleep -Seconds 30 }
 if ($env:PSL_TEST_SCENARIO -eq 'login-failure') { exit 9 }
 exit 0
@@ -288,7 +339,7 @@ exit $LASTEXITCODE
         }
         $output = & $powerShell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $wrapperPath -CaseRoot $caseRoot -Scenario $scenario 2>&1
         $controllerExit = $LASTEXITCODE
-        $expectedExit = switch ($scenario) { 'success' { 0 }; 'already-running' { 2 }; default { 1 } }
+        $expectedExit = switch ($scenario) { { $_ -in @('success', 'companion-close', 'pokerstars-close', 'all-close') } { 0 }; 'already-running' { 2 }; default { 1 } }
         Assert-True ($controllerExit -eq $expectedExit) "Controller scenario '$scenario' returned $controllerExit`: $output"
         $controllerLog = Get-Content -LiteralPath (Join-Path $caseRoot 'local\PokerStarsLauncher\logs\launcher.log') -Raw
         if ($scenario -eq 'already-running') {
@@ -300,15 +351,20 @@ exit $LASTEXITCODE
             $existingSession.WaitForExit()
             $existingSession.Dispose()
         }
-        elseif ($scenario -eq 'success') {
+        elseif ($scenario -in @('pokerstars-close', 'all-close')) {
+            Assert-True ($controllerLog -like '*Launch cancelled: PokerStars closed normally*') 'Normal PokerStars close must cancel pending login automation.'
+            Assert-True ($controllerLog -notlike '*LAUNCHER FAILURE*' -and $controllerLog -notlike '*terminated the entire*') 'Normal closure must not trigger a failure or terminate other applications.'
+        }
+        elseif ($scenario -in @('success', 'companion-close')) {
             Assert-True ($controllerLog -like '*Launcher completed successfully*') "Controller did not confirm successful startup. Output: $output Log: $controllerLog"
         }
         else {
             $expectedError = switch ($scenario) {
                 'start-failure' { '*Could not start StarsCaption*CreateProcess failed*' }
-                'updater-failure' { '*Xeester updater exited with code 7*not running*' }
+                'updater-failure' { '*Xeester updater exited with code 7*did not start*' }
                 'login-failure' { '*login helper failed with exit code 9*' }
-                'hung-helper' { '*did not complete within 10 seconds*' }
+                'hung-helper' { '*did not complete within 15 seconds*' }
+                'pokerstars-crash' { '*exited unexpectedly with code 7*' }
             }
             Assert-True ($controllerLog -like $expectedError) "Wrong controller failure for '$scenario': $controllerLog"
             Assert-True ($controllerLog -like '*Windows terminated the entire launcher process job*') 'Controller did not run failure cleanup.'
@@ -317,15 +373,16 @@ exit $LASTEXITCODE
         foreach ($fixture in @(Get-Process -Name PokerStars, xeester, StarsCaption -ErrorAction SilentlyContinue)) {
             try {
                 if (-not (Test-FixtureProcessPath $fixture $appsDir)) { continue }
-                if ($scenario -ne 'success') { throw "Fixture PID $($fixture.Id) survived failed controller cleanup." }
+                if ($scenario -notin @('success', 'companion-close', 'pokerstars-close')) { throw "Fixture PID $($fixture.Id) survived failed controller cleanup." }
                 $runningFixtureCount++
                 $fixture.Kill()
                 $fixture.WaitForExit()
             }
             finally { $fixture.Dispose() }
         }
-        if ($scenario -eq 'success') {
-            Assert-True ($runningFixtureCount -eq 3) 'Successful controller must leave all three fixture apps running.'
+        if ($scenario -in @('success', 'companion-close', 'pokerstars-close', 'all-close')) {
+            $expectedRunning = switch ($scenario) { 'success' { 3 }; 'companion-close' { 1 }; 'pokerstars-close' { 2 }; 'all-close' { 0 } }
+            Assert-True ($runningFixtureCount -eq $expectedRunning) "Scenario '$scenario' left $runningFixtureCount apps running, expected $expectedRunning."
         }
     }
 
@@ -357,6 +414,9 @@ exit $LASTEXITCODE
     Write-Host 'Passed Windows runtime regressions: updater handoffs, genuine failures, delayed grandchildren, job/path isolation, failure cleanup, logging failures, complete controller success/failure/timeout scenarios, and both uninstall data choices.'
 }
 finally {
+    foreach ($root in $trackedRoots) {
+        if ($null -ne $root.ApplicationProcess) { $root.ApplicationProcess.Dispose() }
+    }
     foreach ($job in $jobs) {
         $ignored = $null
         [void][PokerStarsLauncherProcessJob]::Terminate($job, [ref]$ignored)

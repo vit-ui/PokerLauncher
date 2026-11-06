@@ -42,13 +42,13 @@ The three applications are started in that order without waiting for one updater
 
 Login-form detection waits up to 180 seconds and targets only PokerStars in this invocation's process job. After the Login notification, the original login dialog must disappear within 30 seconds while PokerStars remains running. This confirms that the dialog accepted the submission; it does not independently prove that PokerStars authenticated the account. The controller also enforces a 240-second limit for application startup and login, so a stuck helper cannot leave it waiting indefinitely.
 
-If application startup or login submission fails, the launcher stops and terminates the processes started by that invocation, including their descendants. Processes that were already running before this launcher invocation are not placed in its Windows Job Object and are not terminated. Failure details are shown in a Windows dialog and written to `%LOCALAPPDATA%\PokerStarsLauncher\logs\launcher.log`.
+After an application has been confirmed started, closing it normally does not turn its updater handoff into a startup failure. Closing PokerStars during pending login stops login automation and leaves the other applications alone. Genuine startup failures and application crashes still stop the launch and terminate processes owned by that invocation. Processes that were already running are not placed in its Windows Job Object and are not terminated. Error dialogs show a short explanation and next step. Technical details stay in the log files under `%LOCALAPPDATA%\PokerStarsLauncher\logs`.
 
 The elevated process runs under the same Windows account that approved UAC. This is required because the password is protected with that account's DPAPI context.
 
 ## Updating
 
-To update, download the new `PokerStarsLauncher.exe` from the latest GitHub Release and run it. It replaces the installed application files under LocalAppData while preserving configuration and the encrypted password. The Desktop and Start Menu shortcuts continue to point to the same installed path.
+To update, download the new `PokerStarsLauncher.exe` from the latest GitHub Release and run it. It replaces the installed application files, refreshes shortcuts and the Windows Apps version entry, and then confirms the installed version. Configuration and the encrypted password are preserved; uninstalling first is unnecessary. Updating does not launch the poker applications. Use the Desktop or Start Menu shortcut when ready to launch.
 
 ## Uninstalling
 

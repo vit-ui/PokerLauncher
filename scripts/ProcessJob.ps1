@@ -263,6 +263,29 @@ public static class PokerStarsLauncherProcessJob {
         return true;
     }
 
+    public static bool StopProcess(int processHandleId, out string error) {
+        error = null;
+        IntPtr process;
+        lock (ProcessHandles) {
+            if (!ProcessHandles.TryGetValue(processHandleId, out process)) {
+                error = "No retained handle exists for the login helper.";
+                return false;
+            }
+        }
+        if (WaitForSingleObject(process, 0) == WAIT_OBJECT_0) return true;
+        if (!TerminateProcess(process, 0)) {
+            string reason = LastError();
+            if (WaitForSingleObject(process, 0) == WAIT_OBJECT_0) return true;
+            error = "Could not stop login automation: " + reason;
+            return false;
+        }
+        if (WaitForSingleObject(process, 10000) != WAIT_OBJECT_0) {
+            error = "Login automation did not stop within 10 seconds.";
+            return false;
+        }
+        return true;
+    }
+
     public static bool Terminate(IntPtr job, out string error) {
         error = null;
         if (job == IntPtr.Zero) return true;

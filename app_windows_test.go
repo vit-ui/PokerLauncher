@@ -41,8 +41,97 @@ func TestAlreadyRunningDialogExplainsNextStepWithoutOldFailures(t *testing.T) {
 		}
 	}
 	_, failureMessage, failureFlags := launchErrorDialog(errors.New("real startup failure"))
-	if failureFlags != mbOK|mbIconError || !strings.Contains(failureMessage, "real startup failure") {
-		t.Fatal("genuine errors must retain their failure dialog and diagnostics")
+	if failureFlags != mbOK|mbIconError || strings.Contains(failureMessage, "real startup failure") {
+		t.Fatal("genuine errors must use a concise failure dialog without raw technical output")
+	}
+}
+
+func TestFailureDialogsAreShortAndKeepDiagnosticsInLog(t *testing.T) {
+	t.Setenv("LOCALAPPDATA", t.TempDir())
+	cases := []struct{ detail, want string }{
+		{"launch.ps1 failed: exit status 1\nLAUNCHER FAILED: Xeester updater exited with code 2, but C:\\Xeester\\jre\\bin\\xeester.exe did not start. (launch.ps1 line 53)", "Xeester could not finish starting"},
+		{"PokerStars login helper failed with exit code 1. See C:\\logs\\login-error.txt", "PokerStars login could not be completed"},
+		{"The saved password cannot be decrypted. (launch.ps1 line 110)", "saved launcher settings need attention"},
+		{"Application 'C:\\PokerStars\\PokerStars.exe' exited unexpectedly with code 7.", "PokerStars could not finish starting"},
+		{"Application startup did not complete within 240 seconds.", "took too long"},
+		{"installing PokerStarsLauncher.exe: Access denied", "update could not be installed"},
+		{"refreshing application shortcuts and uninstall registration: register.ps1 failed: exit status 1", "shortcuts and Windows Apps entry"},
+		{"Unknown native exception at launch.ps1 line 133", "could not complete startup"},
+	}
+	for _, item := range cases {
+		message := formatLaunchError(errors.New(item.detail))
+		if !strings.Contains(message, item.want) || len(message) > 400 || strings.Count(message, "\n") > 4 {
+			t.Errorf("unexpected failure message: %q", message)
+		}
+		for _, technical := range []string{"exit status", ".ps1", "C:\\", "LAUNCHER FAILED", "line 133"} {
+			if strings.Contains(message, technical) {
+				t.Errorf("dialog leaked technical detail %q: %s", technical, message)
+			}
+		}
+		logApplicationError(errors.New(item.detail))
+	}
+	diagnostic, err := os.ReadFile(filepath.Join(os.Getenv("LOCALAPPDATA"), "PokerStarsLauncher", "logs", "application.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range cases {
+		if !strings.Contains(string(diagnostic), item.detail) {
+			t.Errorf("full diagnostic was not saved: %s", item.detail)
+		}
+	}
+}
+
+func TestUpgradeRefreshesRegistrationWithoutUninstall(t *testing.T) {
+	installDir := filepath.Join(t.TempDir(), "installed app é")
+	if err := os.MkdirAll(installDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	for name, data := range map[string]string{"PokerStarsLauncher.exe": "old executable", "version.txt": "1.0.2"} {
+		if err := os.WriteFile(filepath.Join(installDir, name), []byte(data), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := installOrUpdate(installDir); err != nil {
+		t.Fatal(err)
+	}
+	source, err := embeddedResources.ReadFile("scripts/register.ps1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	literal := func(value string) string { return "'" + strings.ReplaceAll(value, "'", "''") + "'" }
+	testID := t.TempDir()
+	testRegistry := `HKCU:\Software\PokerStarsLauncherTests\` + filepath.Base(filepath.Dir(testID)) + "-" + filepath.Base(testID)
+	desktop := filepath.Join(installDir, "test desktop")
+	programs := filepath.Join(installDir, "test programs")
+	if err := os.MkdirAll(desktop, 0755); err != nil {
+		t.Fatal(err)
+	}
+	registration := string(source)
+	registration = strings.ReplaceAll(registration, `'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\PokerStarsLauncher'`, literal(testRegistry))
+	registration = strings.ReplaceAll(registration, `[Environment]::GetFolderPath('DesktopDirectory')`, literal(desktop))
+	registration = strings.ReplaceAll(registration, `[Environment]::GetFolderPath('Programs')`, literal(programs))
+	// Execute the real registration logic in an isolated registry key and
+	// temporary shortcut folders, including an older installed version.
+	wrapper := "$ErrorActionPreference = 'Stop'\r\n$testRegistry = " + literal(testRegistry) + `
+try {
+    New-Item -Path $testRegistry -Force | Out-Null
+    New-ItemProperty -Path $testRegistry -Name DisplayVersion -Value '1.0.2' -Force | Out-Null
+` + registration + "\r\n" + `
+    $entry = Get-ItemProperty -LiteralPath $testRegistry
+    if ($entry.DisplayVersion -ne ` + literal(version) + `) { throw 'Windows Apps kept the old version.' }
+    if ($entry.InstallLocation -ne ` + literal(installDir) + `) { throw 'Incorrect installation registration.' }
+    $shell = New-Object -ComObject WScript.Shell
+    $shortcut = $shell.CreateShortcut(` + literal(filepath.Join(desktop, "PokerStars Launcher.lnk")) + `)
+    if ($shortcut.TargetPath -ne ` + literal(filepath.Join(installDir, "PokerStarsLauncher.exe")) + ` -or $shortcut.Arguments -ne '--launch') { throw 'The launch shortcut was not refreshed.' }
+}
+finally { Remove-Item -LiteralPath $testRegistry -Recurse -Force -ErrorAction SilentlyContinue }
+`
+	data := append([]byte{0xef, 0xbb, 0xbf}, []byte(wrapper)...)
+	if err := os.WriteFile(filepath.Join(installDir, "scripts", "register.ps1"), data, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := runPowerShellInDirectory(installDir, "register.ps1"); err != nil {
+		t.Fatal(err)
 	}
 }
 

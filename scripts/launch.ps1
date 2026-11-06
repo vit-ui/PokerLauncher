@@ -18,17 +18,6 @@ function Write-LauncherLog {
 function Test-LauncherApplication {
     param($Root, [IntPtr]$Job, [double]$ElapsedSeconds, [int]$HandoffTimeoutSeconds = 30)
 
-    $applicationRunning = $false
-    $applicationName = [IO.Path]::GetFileNameWithoutExtension($Root.ApplicationPath)
-    foreach ($candidate in @(Get-Process -Name $applicationName -ErrorAction SilentlyContinue)) {
-        try {
-            if ([PokerStarsLauncherProcessJob]::IsRunningInJob($Job, $candidate, $Root.ApplicationPath)) {
-                $applicationRunning = $true
-            }
-        }
-        finally { $candidate.Dispose() }
-    }
-
     [uint32]$rootExitCode = 0
     $rootError = $null
     $rootExited = [PokerStarsLauncherProcessJob]::HasExited(
@@ -43,17 +32,57 @@ function Test-LauncherApplication {
         if (-not $Root.IsUpdater -and $rootExitCode -ne 0) {
             throw "$($Root.Name) exited with code $rootExitCode."
         }
-        if ($applicationRunning) {
-            if (-not $Root.HandoffLogged) {
+    }
+
+    if ($null -ne $Root.ApplicationProcess) {
+        $Root.ApplicationProcess.Refresh()
+        if (-not $Root.ApplicationProcess.HasExited) {
+            if ($rootExited -and -not $Root.HandoffLogged) {
                 Write-LauncherLog "Confirmed $($Root.Name) handoff: '$($Root.ApplicationPath)' is running in this launcher's process job (updater exit code $rootExitCode)."
                 $Root.HandoffLogged = $true
             }
+            return $true
         }
-        elseif (($ElapsedSeconds - $Root.ExitObservedAt) -ge $HandoffTimeoutSeconds) {
-            throw "$($Root.Name) exited with code $rootExitCode, but '$($Root.ApplicationPath)' is not running in this launcher's process job after $HandoffTimeoutSeconds seconds."
+        if ($Root.ApplicationProcess.ExitCode -ne 0) {
+            throw "Application '$($Root.ApplicationPath)' exited unexpectedly with code $($Root.ApplicationProcess.ExitCode)."
         }
     }
-    return $applicationRunning
+
+    # Keep the verified process handle, including its exit code. Once startup
+    # was observed, a normal close must not become a failed updater handoff.
+    $applicationRunning = $false
+    $applicationName = [IO.Path]::GetFileNameWithoutExtension($Root.ApplicationPath)
+    foreach ($candidate in @(Get-Process -Name $applicationName -ErrorAction SilentlyContinue)) {
+        $retain = $false
+        try {
+            if (-not $applicationRunning -and [PokerStarsLauncherProcessJob]::IsRunningInJob($Job, $candidate, $Root.ApplicationPath)) {
+                if ($null -ne $Root.ApplicationProcess) { $Root.ApplicationProcess.Dispose() }
+                $Root.ApplicationProcess = $candidate
+                $Root.ClosedNormally = $false
+                $retain = $true
+                $applicationRunning = $true
+                Write-LauncherLog "Confirmed application startup: '$($Root.ApplicationPath)' (PID $($candidate.Id))."
+                if ($rootExited -and -not $Root.HandoffLogged) {
+                    Write-LauncherLog "Confirmed $($Root.Name) handoff: '$($Root.ApplicationPath)' is running in this launcher's process job (updater exit code $rootExitCode)."
+                    $Root.HandoffLogged = $true
+                }
+            }
+        }
+        finally { if (-not $retain) { $candidate.Dispose() } }
+    }
+
+    if ($applicationRunning) { return $true }
+    if ($null -ne $Root.ApplicationProcess) {
+        if (-not $Root.ClosedNormally) {
+            Write-LauncherLog "Application closed normally after confirmed startup: '$($Root.ApplicationPath)'."
+            $Root.ClosedNormally = $true
+        }
+        return $true
+    }
+    if ($rootExited -and ($ElapsedSeconds - $Root.ExitObservedAt) -ge $HandoffTimeoutSeconds) {
+        throw "$($Root.Name) exited with code $rootExitCode, but '$($Root.ApplicationPath)' did not start in this launcher's process job within $HandoffTimeoutSeconds seconds."
+    }
+    return $false
 }
 
 function Test-IsAdministrator {
@@ -71,8 +100,6 @@ if (-not (Test-IsAdministrator)) {
 
 New-Item -ItemType Directory -Path $logDirectory -Force | Out-Null
 
-. (Join-Path $PSScriptRoot 'ProcessJob.ps1')
-
 $jobHandle = [IntPtr]::Zero
 $rootProcesses = @()
 $loginProcessId = 0
@@ -84,7 +111,9 @@ $startupTimer = [Diagnostics.Stopwatch]::StartNew()
 $startupTimeoutSeconds = 240
 
 try {
+    Write-LauncherLog "Launcher run started. Start time UTC: $runStartedUtcText"
     Remove-Item -LiteralPath (Join-Path $logDirectory 'login-error.txt') -Force -ErrorAction SilentlyContinue
+    . (Join-Path $PSScriptRoot 'ProcessJob.ps1')
     if (-not (Test-Path -LiteralPath $configPath -PathType Leaf)) {
         throw "Configuration not found: $configPath. Run Configure PokerStarsLauncher from the Start Menu first."
     }
@@ -141,7 +170,6 @@ try {
         throw "Could not create the process job used for failure cleanup: $nativeError"
     }
 
-    Write-LauncherLog "Launcher started elevated. Start time UTC: $runStartedUtcText"
     Write-LauncherLog 'Failure cleanup uses a Windows Job Object. Each process is assigned while suspended before it can spawn descendants.'
 
     # Preserve the original BAT behavior: launch these three in order, with no
@@ -165,6 +193,8 @@ try {
             IsUpdater = $item.IsUpdater
             ExitObservedAt = -1.0
             HandoffLogged = $false
+            ApplicationProcess = $null
+            ClosedNormally = $false
         }
         Write-LauncherLog "Started $($item.Name): $($item.Path) (PID $processId)."
     }
@@ -181,16 +211,33 @@ try {
     }
     Write-LauncherLog "Started PokerStars login helper (PID $loginProcessId)."
 
+    $pokerStarsClosedAt = -1.0
+    $loginFailureAt = -1.0
+    $cancelled = $false
     while ($true) {
         if ($startupTimer.Elapsed.TotalSeconds -ge $startupTimeoutSeconds) {
             throw "Application startup and PokerStars login did not complete within $startupTimeoutSeconds seconds. See launcher.log and login.log for the last observed state."
         }
-        $allApplicationsRunning = $true
+        $allApplicationsStarted = $true
         foreach ($root in $rootProcesses) {
             if (-not (Test-LauncherApplication -Root $root -Job $jobHandle -ElapsedSeconds $startupTimer.Elapsed.TotalSeconds)) {
-                $allApplicationsRunning = $false
+                $allApplicationsStarted = $false
             }
         }
+
+        if ($rootProcesses[0].ClosedNormally) {
+            if ($pokerStarsClosedAt -lt 0) { $pokerStarsClosedAt = $startupTimer.Elapsed.TotalSeconds }
+            # Allow a short handoff to a replacement PokerStars process.
+            if (($startupTimer.Elapsed.TotalSeconds - $pokerStarsClosedAt) -ge 1) {
+                $stopError = $null
+                if (-not [PokerStarsLauncherProcessJob]::StopProcess($loginProcessHandleId, [ref]$stopError)) { throw $stopError }
+                Write-LauncherLog 'Launch cancelled: PokerStars closed normally during startup. Login automation stopped; other applications were left alone.'
+                Remove-Item -LiteralPath (Join-Path $logDirectory 'login-error.txt') -Force -ErrorAction SilentlyContinue
+                $cancelled = $true
+                break
+            }
+        }
+        else { $pokerStarsClosedAt = -1.0 }
 
         [uint32]$loginExitCode = 0
         $loginError = $null
@@ -200,15 +247,20 @@ try {
         if (-not [string]::IsNullOrWhiteSpace($loginError)) { throw $loginError }
         if ($loginExited) {
             if ($loginExitCode -ne 0) {
-                throw "PokerStars login helper failed with exit code $loginExitCode. See '$((Join-Path $logDirectory 'login-error.txt'))'."
+                if ($loginFailureAt -lt 0) { $loginFailureAt = $startupTimer.Elapsed.TotalSeconds }
+                if (($startupTimer.Elapsed.TotalSeconds - $loginFailureAt) -ge 1 -and -not $rootProcesses[0].ClosedNormally) {
+                    throw "PokerStars login helper failed with exit code $loginExitCode. See '$((Join-Path $logDirectory 'login-error.txt'))'."
+                }
             }
-            if ($allApplicationsRunning) { break }
+            elseif ($allApplicationsStarted -and -not $rootProcesses[0].ClosedNormally) { break }
         }
         Start-Sleep -Milliseconds 300
     }
 
-    Write-LauncherLog 'Launcher completed successfully. Applications remain running.'
-    Write-Host 'PokerStars login was submitted successfully. The applications remain running.' -ForegroundColor Green
+    if (-not $cancelled) {
+        Write-LauncherLog 'Launcher completed successfully. Application startup and login submission were confirmed.'
+        Write-Host 'PokerStars login was submitted successfully.' -ForegroundColor Green
+    }
     [PokerStarsLauncherProcessJob]::CloseProcessHandles()
     [PokerStarsLauncherProcessJob]::CloseJob($jobHandle)
     $jobHandle = [IntPtr]::Zero
@@ -245,4 +297,9 @@ catch {
     }
     Write-Host "See launcher log: $logPath" -ForegroundColor Yellow
     exit 1
+}
+finally {
+    foreach ($root in $rootProcesses) {
+        if ($null -ne $root.ApplicationProcess) { $root.ApplicationProcess.Dispose() }
+    }
 }

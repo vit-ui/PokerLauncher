@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 	"unsafe"
 )
 
@@ -95,6 +96,9 @@ func run() error {
 		if err := installOrUpdate(installDir); err != nil {
 			return err
 		}
+		if err := runPowerShellInDirectory(installDir, "register.ps1"); err != nil {
+			return fmt.Errorf("refreshing application shortcuts and uninstall registration: %w", err)
+		}
 		targetExe := filepath.Join(installDir, "PokerStarsLauncher.exe")
 		sourceExe, err := os.Executable()
 		if err != nil {
@@ -103,15 +107,13 @@ func run() error {
 		if !samePath(sourceExe, targetExe) {
 			if mode == "" {
 				if configExists() {
-					mode = "--launch"
+					showMessage("PokerStarsLauncher updated", "Version "+version+" has been installed.\r\n\r\nUse the PokerStars Launcher shortcut when you're ready to start your applications.", mbOK|mbIconInformation)
+					return nil
 				} else {
 					mode = "--setup"
 				}
 			}
 			return runInstalledCopy(targetExe, mode)
-		}
-		if err := runPowerShell("register.ps1"); err != nil {
-			return fmt.Errorf("refreshing application shortcuts and uninstall registration: %w", err)
 		}
 	}
 
@@ -389,7 +391,11 @@ func runPowerShell(scriptName string) error {
 	if err != nil {
 		return fmt.Errorf("locating the installed application: %w", err)
 	}
-	scriptPath := filepath.Join(filepath.Dir(executable), "scripts", scriptName)
+	return runPowerShellInDirectory(filepath.Dir(executable), scriptName)
+}
+
+func runPowerShellInDirectory(directory, scriptName string) error {
+	scriptPath := filepath.Join(directory, "scripts", scriptName)
 	if _, err := os.Stat(scriptPath); err != nil {
 		return fmt.Errorf("required application component is missing (%s): %w", scriptName, err)
 	}
@@ -401,7 +407,7 @@ func runPowerShell(scriptName string) error {
 	// CREATE_NO_WINDOW suppresses the console while leaving GUI windows visible.
 	arguments, processAttributes := powerShellProcessOptions(scriptName, scriptPath)
 	command := exec.Command(powerShell, arguments...)
-	command.Dir = filepath.Dir(executable)
+	command.Dir = directory
 	command.SysProcAttr = processAttributes
 	command.Env = append(os.Environ(), fmt.Sprintf("POKERSTARSL_PARENT_PID=%d", os.Getpid()))
 	output, err := command.CombinedOutput()
@@ -425,6 +431,9 @@ func powerShellResultError(scriptName string, output []byte, err error) error {
 
 func runLauncherController() {
 	if err := runPowerShell("launch.ps1"); err != nil {
+		if !errors.Is(err, errPokerStarsAlreadyRunning) {
+			logApplicationError(err)
+		}
 		title, message, flags := launchErrorDialog(err)
 		showMessage(title, message, flags)
 	}
@@ -440,37 +449,61 @@ func launchErrorDialog(err error) (string, string, uintptr) {
 }
 
 func formatLaunchError(err error) string {
-	message := "The launcher stopped because an error occurred."
-	logDirectory := filepath.Join(os.Getenv("LOCALAPPDATA"), "PokerStarsLauncher", "logs")
-	logPath := filepath.Join(logDirectory, "launcher.log")
-	for _, item := range []struct {
-		path  string
-		label string
-		lines int
-	}{
-		{path: logPath, label: "Launcher log", lines: 18},
-		{path: filepath.Join(logDirectory, "login-error.txt"), label: "PokerStars login error", lines: 12},
-	} {
-		data, readErr := os.ReadFile(item.path)
-		if readErr != nil {
-			continue
-		}
-		lines := strings.Split(strings.TrimSpace(string(data)), "\n")
-		start := len(lines) - item.lines
-		if start < 0 {
-			start = 0
-		}
-		message += "\r\n\r\n" + item.label + ":\r\n" + strings.Join(lines[start:], "\r\n")
-	}
-	message += "\r\n\r\nDetails: " + logPath
+	detail := ""
 	if err != nil {
-		message += "\r\n\r\n" + err.Error()
+		detail = err.Error()
 	}
-	return message
+	setup := "Open Configure PokerStarsLauncher from the Start Menu, check your settings, and try again."
+	switch {
+	case strings.Contains(detail, "saved password"), strings.Contains(detail, "username is missing"),
+		strings.Contains(detail, "Configuration not found"), strings.Contains(detail, "Unsupported configuration"),
+		strings.Contains(detail, "Configured executable"):
+		return "Your saved launcher settings need attention.\r\n\r\n" + setup
+	case strings.Contains(detail, "installing PokerStarsLauncher.exe"):
+		return "The update could not be installed.\r\n\r\nClose any other PokerStarsLauncher windows and run the downloaded EXE again. Your poker applications can stay open."
+	case strings.Contains(detail, "registration"), strings.Contains(detail, "register.ps1"):
+		return "The installation could not finish updating its shortcuts and Windows Apps entry.\r\n\r\nRun the downloaded EXE again to repair the installation."
+	case strings.Contains(detail, "required application component is missing"), strings.Contains(detail, "login helper not found"):
+		return "The launcher installation is missing a required file.\r\n\r\nRun the latest downloaded EXE to repair the installation."
+	case strings.Contains(detail, "login helper failed"):
+		return "PokerStars login could not be completed.\r\n\r\nOpen PokerStars directly to check for a sign-in or connection message, then try the launcher again."
+	case strings.Contains(detail, "did not complete within"):
+		return "Starting the applications took too long.\r\n\r\nCheck for connection problems or update prompts in the applications, then try again."
+	}
+	applications := []struct{ label, executable, display string }{
+		{"PokerStars updater", "pokerstars.exe", "PokerStars"},
+		{"Xeester updater", "xeester.exe", "Xeester"},
+		{"StarsCaption", "starscaption.exe", "StarsCaption"},
+	}
+	for _, app := range applications {
+		if strings.Contains(detail, "Could not start "+app.label) || strings.Contains(detail, app.label+" exited with code") ||
+			(strings.Contains(detail, "exited unexpectedly") && strings.Contains(strings.ToLower(detail), app.executable)) {
+			return app.display + " could not finish starting.\r\n\r\nOpen " + app.display + " directly to check for an update or error message, then try the launcher again."
+		}
+	}
+	return "The launcher could not complete startup.\r\n\r\nTry again. If the problem continues, the technical details are in the launcher logs."
+}
+
+// Keep diagnostics on disk instead of copying scripts and history into dialogs.
+func logApplicationError(err error) {
+	if err == nil || strings.TrimSpace(os.Getenv("LOCALAPPDATA")) == "" {
+		return
+	}
+	directory := filepath.Join(os.Getenv("LOCALAPPDATA"), "PokerStarsLauncher", "logs")
+	if os.MkdirAll(directory, 0755) != nil {
+		return
+	}
+	file, openErr := os.OpenFile(filepath.Join(directory, "application.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+	if openErr != nil {
+		return
+	}
+	defer file.Close()
+	fmt.Fprintf(file, "%s  %v\r\n", time.Now().Format("2006-01-02 15:04:05.000"), err)
 }
 
 func showFatal(err error) {
-	showMessage("PokerStarsLauncher", err.Error(), mbOK|mbIconError)
+	logApplicationError(err)
+	showMessage("PokerStarsLauncher", formatLaunchError(err), mbOK|mbIconError)
 }
 
 func showMessage(title, message string, flags uintptr) {
