@@ -306,7 +306,7 @@ try {
     foreach ($item in $launchItems) {
         $processId = 0
         $processHandleId = 0
-        $applicationWorkingDirectory = Split-Path -LiteralPath $item.Path -Parent
+        $applicationWorkingDirectory = [System.IO.Path]::GetDirectoryName($item.Path)
         $started = [PokerStarsLauncherProcessJob]::StartProcess(
             $jobHandle, $item.Path, '', $applicationWorkingDirectory, $false,
             [ref]$processId, [ref]$processHandleId, [ref]$nativeError
@@ -383,6 +383,10 @@ try {
 }
 catch {
     $failureMessage = $_.Exception.Message
+    if ($_.InvocationInfo.ScriptLineNumber -gt 0) {
+        $failureLine = $_.InvocationInfo.Line.Trim()
+        $failureMessage = '{0} (launch.ps1 line {1}: {2})' -f $failureMessage, $_.InvocationInfo.ScriptLineNumber, $failureLine
+    }
     if (Test-Path -LiteralPath $logDirectory -PathType Container) {
         Write-LauncherLog "LAUNCHER FAILURE: $failureMessage"
     }
