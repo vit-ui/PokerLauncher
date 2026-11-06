@@ -67,10 +67,8 @@ public static class PokerStarsLauncherProcessJob {
     private static extern bool IsProcessInJob(IntPtr process, IntPtr job, out bool result);
 
     [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern IntPtr OpenProcess(uint access, bool inheritHandle, int processId);
-
-    [DllImport("kernel32.dll", EntryPoint = "QueryFullProcessImageNameW", CharSet = CharSet.Unicode, SetLastError = true)]
-    private static extern bool QueryFullProcessImageName(IntPtr process, uint flags, StringBuilder path, ref uint size);
+    private static extern bool QueryInformationJobObject(IntPtr job, int informationClass,
+        IntPtr information, uint informationLength, IntPtr returnLength);
 
     [DllImport("kernel32.dll", EntryPoint = "CreateProcessW", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern bool CreateProcess(
@@ -120,37 +118,57 @@ public static class PokerStarsLauncherProcessJob {
         return job;
     }
 
-    // Keep the process handle open while checking identity and membership so
-    // PID reuse or an unrelated same-name process cannot establish a handoff.
-    public static bool IsRunningInJob(IntPtr job, Process process, string expectedPath) {
-        // Process.Handle requests broad access and can fail for unrelated
-        // elevated same-name apps. Query identity with the minimum rights.
-        IntPtr handle = OpenProcess(0x00101000, false, process.Id); // SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION
-        if (handle == IntPtr.Zero) {
-            int code = Marshal.GetLastWin32Error();
-            if (code == 5 || code == 87) return false; // Inaccessible unrelated process, or already exited.
-            throw new Win32Exception(code, "Could not open a process for launcher ownership inspection.");
+    // Ask the owned job for its members before accessing a process. There is
+    // no reason to open arbitrary same-name processes elsewhere on the PC.
+    private static bool ContainsProcessId(IntPtr job, int processId) {
+        int capacity = 32;
+        while (capacity <= 1048576) {
+            int size = checked(8 + capacity * IntPtr.Size);
+            IntPtr buffer = Marshal.AllocHGlobal(size);
+            try {
+                bool queried = QueryInformationJobObject(job, 3, buffer, (uint)size, IntPtr.Zero);
+                int code = queried ? 0 : Marshal.GetLastWin32Error();
+                if (!queried && code != 234) // ERROR_MORE_DATA
+                    throw new Win32Exception(code, "Could not query the launcher process job.");
+                if (queried) {
+                    int count = Marshal.ReadInt32(buffer, 4);
+                    if (count < 0 || count > capacity)
+                        throw new InvalidOperationException("Windows returned an invalid job process count.");
+                    for (int index = 0; index < count; index++) {
+                        if (Marshal.ReadIntPtr(buffer, 8 + index * IntPtr.Size).ToInt64() == processId)
+                            return true;
+                    }
+                    return false;
+                }
+            }
+            finally { Marshal.FreeHGlobal(buffer); }
+            capacity *= 2;
         }
+        throw new InvalidOperationException("The launcher process job is too large to inspect.");
+    }
+
+    public static bool IsRunningInJob(IntPtr job, Process process, string expectedPath) {
+        if (!ContainsProcessId(job, process.Id)) return false;
         try {
+            IntPtr handle = process.Handle;
             if (WaitForSingleObject(handle, 0) != WAIT_TIMEOUT) return false;
             bool member;
             if (!IsProcessInJob(handle, job, out member))
                 throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not query launcher process job membership.");
             if (!member) return false;
             if (!String.IsNullOrEmpty(expectedPath)) {
-                StringBuilder actualPath = new StringBuilder(32768);
-                uint size = (uint)actualPath.Capacity;
-                if (!QueryFullProcessImageName(handle, 0, actualPath, ref size)) {
-                    int code = Marshal.GetLastWin32Error();
-                    if (WaitForSingleObject(handle, 0) == WAIT_OBJECT_0) return false;
-                    throw new Win32Exception(code, "Could not read a launcher application's executable path.");
-                }
-                if (!String.Equals(System.IO.Path.GetFullPath(actualPath.ToString()),
+                string actualPath = process.MainModule.FileName;
+                if (!String.Equals(System.IO.Path.GetFullPath(actualPath),
                                    System.IO.Path.GetFullPath(expectedPath), StringComparison.OrdinalIgnoreCase)) return false;
             }
             return WaitForSingleObject(handle, 0) == WAIT_TIMEOUT;
         }
-        finally { CloseHandle(handle); }
+        catch (InvalidOperationException) { return false; } // Exited during inspection.
+        catch (Win32Exception error) {
+            if (error.NativeErrorCode == 5 || error.NativeErrorCode == 6 || error.NativeErrorCode == 87 || error.NativeErrorCode == 299)
+                return false; // Exited, or Windows does not allow inspection.
+            throw;
+        }
     }
 
     public static bool StartProcess(IntPtr job, string applicationPath, string arguments,

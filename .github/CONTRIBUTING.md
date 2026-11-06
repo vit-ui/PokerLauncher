@@ -57,7 +57,7 @@ Use Conventional Commits. Commitizen validates commit messages; Lefthook runs Gi
 1. Merge Conventional Commit changes to `master`. The release workflow calls the complete merge-safety workflow and waits for all its checks before running Release Please.
 2. Review and merge the Release Please pull request.
 3. Release Please creates the version tag and GitHub Release.
-4. A dependent Windows job in the same workflow run checks out the release tag, repeats Go and PowerShell validation, builds `PokerStarsLauncher.exe`, calculates its SHA-256 checksum, and attaches both files to that release. Go tests, vet, and PowerShell validation use separate steps so one successful command cannot hide another command's failure.
+4. A dependent Windows job in the same workflow run checks out the release tag, repeats Go and PowerShell validation, builds `PokerStarsLauncher.exe`, calculates its SHA-256 checksum, and scans the EXE with Microsoft Defender before attaching both files to that release. Go tests, vet, and PowerShell validation use separate steps so one successful command cannot hide another command's failure. CI also scans its Windows build. `tests/Scan-Release.ps1` updates Defender security intelligence and blocks upload on findings or scan failures without disabling protection.
 5. Verify the release asset and test the published executable on Windows before announcing the release.
 
 The release workflow currently targets Windows x64. Do not publish a release without the `PokerStarsLauncher.exe` asset.
