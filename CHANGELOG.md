@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here. Release Please updates this file from Conventional Commit messages.
 
+## [1.0.9](https://github.com/vit-ui/PokerStarsLauncher/compare/v1.0.8...v1.0.9) (2026-11-06)
+
+
+### Bug Fixes
+
+* embed application icon in executable and shortcuts ([635b71b](https://github.com/vit-ui/PokerStarsLauncher/commit/635b71b210019b56add60327d0572b2701aa90c6))
+
 ## [1.0.8](https://github.com/vit-ui/PokerStarsLauncher/compare/v1.0.7...v1.0.8) (2026-11-06)
 
 
