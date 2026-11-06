@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here. Release Please updates this file from Conventional Commit messages.
 
+## [1.0.2](https://github.com/vit-ui/PokerStarsLauncher/compare/v1.0.1...v1.0.2) (2026-11-06)
+
+
+### Bug Fixes
+
+* hide setup console without hiding dialog ([ab02392](https://github.com/vit-ui/PokerStarsLauncher/commit/ab0239270ecdfbfb122f57ae2a2e4ba4f02b5b7e))
+
 ## [1.0.1](https://github.com/vit-ui/PokerStarsLauncher/compare/v1.0.0...v1.0.1) (2026-11-06)
 
 
