@@ -14,6 +14,7 @@ func TestEmbeddedPowerShellComponents(t *testing.T) {
 		"scripts/register.ps1",
 		"scripts/uninstall.ps1",
 		"assets/README.md",
+		"assets/PokerStarsLauncher.ico",
 	}
 	for _, name := range required {
 		if _, err := fs.Stat(embeddedResources, name); err != nil {

@@ -67,6 +67,8 @@ No Go installation, Inno Setup, separate .NET runtime, or third-party launcher d
 
 The EXE is a Go Windows GUI executable. The working PowerShell implementation is embedded into it at build time and extracted into the per-user application directory at runtime. It is not a PowerShell rewrite of the existing PokerStars native login automation.
 
+The application icon is `assets/PokerStarsLauncher.ico`. Its native Windows resource is checked in as `rsrc_windows_amd64.syso`, so regular builds include the EXE icon automatically. After changing the ICO, run `go generate .` and commit the updated resource alongside it. See [assets/README.md](assets/README.md).
+
 Build locally from a Windows or cross-compiling Go environment:
 
 ```powershell

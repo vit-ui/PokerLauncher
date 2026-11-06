@@ -7,6 +7,7 @@
 *.yml text eol=lf
 *.yaml text eol=lf
 *.ico binary
+*.syso binary
 *.png binary
 *.jpg binary
 *.jpeg binary
