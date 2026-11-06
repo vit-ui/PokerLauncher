@@ -27,3 +27,11 @@ Desktop.ini
 .vscode/
 .idea/
 .DS_Store
+
+# Ignore local Markdown notes; keep the repository's existing documentation
+*.md
+!/.github/CONTRIBUTING.md
+!/.github/pull_request_template.md
+!/CHANGELOG.md
+!/README.md
+!/assets/README.md

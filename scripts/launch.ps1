@@ -1,6 +1,6 @@
 $ErrorActionPreference = 'Stop'
 
-$repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+$repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).ProviderPath
 $appDataRoot = Join-Path $env:APPDATA 'PokerStarsLauncher'
 $configPath = Join-Path $appDataRoot 'config.json'
 $logDirectory = Join-Path $env:LOCALAPPDATA 'PokerStarsLauncher\logs'
@@ -11,7 +11,49 @@ $windowsPowerShell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\
 function Write-LauncherLog {
     param([string]$Message)
     $line = '{0:yyyy-MM-dd HH:mm:ss.fff}  {1}' -f (Get-Date), $Message
-    Add-Content -LiteralPath $logPath -Value $line -Encoding UTF8
+    try { Add-Content -LiteralPath $logPath -Value $line -Encoding UTF8 }
+    catch { Write-Warning "Could not write launcher log: $($_.Exception.Message)" }
+}
+
+function Test-LauncherApplication {
+    param($Root, [IntPtr]$Job, [double]$ElapsedSeconds, [int]$HandoffTimeoutSeconds = 30)
+
+    $applicationRunning = $false
+    $applicationName = [IO.Path]::GetFileNameWithoutExtension($Root.ApplicationPath)
+    foreach ($candidate in @(Get-Process -Name $applicationName -ErrorAction SilentlyContinue)) {
+        try {
+            if ([PokerStarsLauncherProcessJob]::IsRunningInJob($Job, $candidate, $Root.ApplicationPath)) {
+                $applicationRunning = $true
+            }
+        }
+        finally { $candidate.Dispose() }
+    }
+
+    [uint32]$rootExitCode = 0
+    $rootError = $null
+    $rootExited = [PokerStarsLauncherProcessJob]::HasExited(
+        [int]$Root.ProcessHandleId, [int]$Root.ProcessId, [ref]$rootExitCode, [ref]$rootError
+    )
+    if (-not [string]::IsNullOrWhiteSpace($rootError)) { throw $rootError }
+    if ($rootExited) {
+        if ($Root.ExitObservedAt -lt 0) {
+            $Root.ExitObservedAt = $ElapsedSeconds
+            Write-LauncherLog "$($Root.Name) exited with code $rootExitCode; checking the application handoff."
+        }
+        if (-not $Root.IsUpdater -and $rootExitCode -ne 0) {
+            throw "$($Root.Name) exited with code $rootExitCode."
+        }
+        if ($applicationRunning) {
+            if (-not $Root.HandoffLogged) {
+                Write-LauncherLog "Confirmed $($Root.Name) handoff: '$($Root.ApplicationPath)' is running in this launcher's process job (updater exit code $rootExitCode)."
+                $Root.HandoffLogged = $true
+            }
+        }
+        elseif (($ElapsedSeconds - $Root.ExitObservedAt) -ge $HandoffTimeoutSeconds) {
+            throw "$($Root.Name) exited with code $rootExitCode, but '$($Root.ApplicationPath)' is not running in this launcher's process job after $HandoffTimeoutSeconds seconds."
+        }
+    }
+    return $applicationRunning
 }
 
 function Test-IsAdministrator {
@@ -29,224 +71,7 @@ if (-not (Test-IsAdministrator)) {
 
 New-Item -ItemType Directory -Path $logDirectory -Force | Out-Null
 
-# A Windows Job Object gives this invocation process-tree ownership. Processes
-# are created suspended, assigned to the job, and only then resumed. Therefore
-# descendants inherit job membership from the start, without polling WMI and
-# risking a missed short-lived parent process. On failure, TerminateJobObject
-# terminates all processes in this invocation while leaving unrelated apps
-# (including sessions that were already running) untouched.
-if (-not ('PokerStarsLauncherProcessJob' -as [type])) {
-    Add-Type -TypeDefinition @'
-using System;
-using System.Collections.Generic;
-using System.ComponentModel;
-using System.Runtime.InteropServices;
-using System.Text;
-
-public static class PokerStarsLauncherProcessJob {
-    private const uint CREATE_SUSPENDED = 0x00000004;
-    private const uint STARTF_USESHOWWINDOW = 0x00000001;
-    private const ushort SW_HIDE = 0;
-    private const uint WAIT_OBJECT_0 = 0x00000000;
-    private const uint WAIT_TIMEOUT = 0x00000102;
-    private const uint INFINITE = 0xFFFFFFFF;
-
-    private static readonly Dictionary<int, IntPtr> ProcessHandles = new Dictionary<int, IntPtr>();
-    private static int NextProcessHandleId = 0;
-
-    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
-    private struct STARTUPINFO {
-        public uint cb;
-        public IntPtr lpReserved;
-        public IntPtr lpDesktop;
-        public IntPtr lpTitle;
-        public uint dwX;
-        public uint dwY;
-        public uint dwXSize;
-        public uint dwYSize;
-        public uint dwXCountChars;
-        public uint dwYCountChars;
-        public uint dwFillAttribute;
-        public uint dwFlags;
-        public ushort wShowWindow;
-        public ushort cbReserved2;
-        public IntPtr lpReserved2;
-        public IntPtr hStdInput;
-        public IntPtr hStdOutput;
-        public IntPtr hStdError;
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct PROCESS_INFORMATION {
-        public IntPtr hProcess;
-        public IntPtr hThread;
-        public uint dwProcessId;
-        public uint dwThreadId;
-    }
-
-    [DllImport("kernel32.dll", EntryPoint = "CreateJobObjectW", CharSet = CharSet.Unicode, SetLastError = true)]
-    private static extern IntPtr CreateJobObject(IntPtr jobAttributes, string name);
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern bool AssignProcessToJobObject(IntPtr job, IntPtr process);
-
-    [DllImport("kernel32.dll", EntryPoint = "CreateProcessW", CharSet = CharSet.Unicode, SetLastError = true)]
-    private static extern bool CreateProcess(
-        string applicationName,
-        StringBuilder commandLine,
-        IntPtr processAttributes,
-        IntPtr threadAttributes,
-        bool inheritHandles,
-        uint creationFlags,
-        IntPtr environment,
-        string currentDirectory,
-        ref STARTUPINFO startupInfo,
-        out PROCESS_INFORMATION processInformation);
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern uint ResumeThread(IntPtr thread);
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern bool TerminateProcess(IntPtr process, uint exitCode);
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern bool TerminateJobObject(IntPtr job, uint exitCode);
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern uint WaitForSingleObject(IntPtr handle, uint milliseconds);
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern bool GetExitCodeProcess(IntPtr process, out uint exitCode);
-
-    [DllImport("kernel32.dll", SetLastError = true)]
-    private static extern bool CloseHandle(IntPtr handle);
-
-    private static string LastError() {
-        return new Win32Exception(Marshal.GetLastWin32Error()).Message;
-    }
-
-    public static IntPtr Create(out string error) {
-        error = null;
-        IntPtr job = CreateJobObject(IntPtr.Zero, null);
-        if (job == IntPtr.Zero) error = "CreateJobObject failed: " + LastError();
-        return job;
-    }
-
-    public static bool StartProcess(IntPtr job, string applicationPath, string arguments,
-                                    string workingDirectory, bool hidden,
-                                    out int processId, out int processHandleId, out string error) {
-        processId = 0;
-        processHandleId = 0;
-        error = null;
-        if (job == IntPtr.Zero) {
-            error = "The process job handle is not available.";
-            return false;
-        }
-
-        STARTUPINFO startup = new STARTUPINFO();
-        startup.cb = (uint)Marshal.SizeOf(typeof(STARTUPINFO));
-        if (hidden) {
-            startup.dwFlags = STARTF_USESHOWWINDOW;
-            startup.wShowWindow = SW_HIDE;
-        }
-
-        string command = "\"" + applicationPath + "\"";
-        if (!String.IsNullOrWhiteSpace(arguments)) command += " " + arguments;
-        StringBuilder mutableCommand = new StringBuilder(command);
-        PROCESS_INFORMATION info;
-
-        bool created = CreateProcess(
-            applicationPath, mutableCommand, IntPtr.Zero, IntPtr.Zero, false,
-            CREATE_SUSPENDED, IntPtr.Zero, workingDirectory, ref startup, out info);
-        if (!created) {
-            error = "CreateProcess failed for '" + applicationPath + "': " + LastError();
-            return false;
-        }
-
-        bool resumed = false;
-        try {
-            if (!AssignProcessToJobObject(job, info.hProcess)) {
-                error = "Could not assign '" + applicationPath + "' to the launcher process job: " + LastError();
-                return false;
-            }
-
-            uint previousSuspendCount = ResumeThread(info.hThread);
-            if (previousSuspendCount == 0xFFFFFFFF) {
-                error = "Could not resume '" + applicationPath + "': " + LastError();
-                return false;
-            }
-
-            lock (ProcessHandles) {
-                NextProcessHandleId++;
-                if (NextProcessHandleId <= 0) NextProcessHandleId = 1;
-                while (ProcessHandles.ContainsKey(NextProcessHandleId)) {
-                    NextProcessHandleId++;
-                    if (NextProcessHandleId <= 0) NextProcessHandleId = 1;
-                }
-                processHandleId = NextProcessHandleId;
-                ProcessHandles.Add(processHandleId, info.hProcess);
-            }
-            processId = (int)info.dwProcessId;
-            resumed = true;
-            return true;
-        }
-        finally {
-            if (!resumed) TerminateProcess(info.hProcess, 1);
-            CloseHandle(info.hThread);
-            if (!resumed) CloseHandle(info.hProcess);
-        }
-    }
-
-    // Returns true only after the process handle is signaled. Exit code is
-    // read from the retained handle, so an immediately-exiting updater is
-    // still observed reliably even if its PID is reused later.
-    public static bool HasExited(int processHandleId, int processId, out uint exitCode, out string error) {
-        exitCode = 0;
-        error = null;
-        IntPtr process;
-        lock (ProcessHandles) {
-            if (!ProcessHandles.TryGetValue(processHandleId, out process)) {
-                error = "No retained process handle exists for process handle ID " + processHandleId + " (PID " + processId + ").";
-                return false;
-            }
-        }
-
-        uint wait = WaitForSingleObject(process, 0);
-        if (wait == WAIT_TIMEOUT) return false;
-        if (wait != WAIT_OBJECT_0) {
-            error = "WaitForSingleObject failed for PID " + processId + ": " + LastError();
-            return false;
-        }
-        if (!GetExitCodeProcess(process, out exitCode)) {
-            error = "GetExitCodeProcess failed for PID " + processId + ": " + LastError();
-            return false;
-        }
-        return true;
-    }
-
-    public static bool Terminate(IntPtr job, out string error) {
-        error = null;
-        if (job == IntPtr.Zero) return true;
-        if (!TerminateJobObject(job, 1)) {
-            error = "TerminateJobObject failed: " + LastError();
-            return false;
-        }
-        return true;
-    }
-
-    public static void CloseJob(IntPtr job) {
-        if (job != IntPtr.Zero) CloseHandle(job);
-    }
-
-    public static void CloseProcessHandles() {
-        lock (ProcessHandles) {
-            foreach (IntPtr process in ProcessHandles.Values) CloseHandle(process);
-            ProcessHandles.Clear();
-        }
-    }
-}
-'@
-}
+. (Join-Path $PSScriptRoot 'ProcessJob.ps1')
 
 $jobHandle = [IntPtr]::Zero
 $rootProcesses = @()
@@ -254,8 +79,12 @@ $loginProcessId = 0
 $failureMessage = $null
 $runStartedUtc = [DateTime]::UtcNow
 $runStartedUtcText = $runStartedUtc.ToString('o', [Globalization.CultureInfo]::InvariantCulture)
+$jobName = 'Local\PokerStarsLauncher-' + [Guid]::NewGuid().ToString('N')
+$startupTimer = [Diagnostics.Stopwatch]::StartNew()
+$startupTimeoutSeconds = 240
 
 try {
+    Remove-Item -LiteralPath (Join-Path $logDirectory 'login-error.txt') -Force -ErrorAction SilentlyContinue
     if (-not (Test-Path -LiteralPath $configPath -PathType Leaf)) {
         throw "Configuration not found: $configPath. Run Configure PokerStarsLauncher from the Start Menu first."
     }
@@ -266,21 +95,33 @@ try {
         throw "Windows PowerShell executable was not found: $windowsPowerShell"
     }
 
-    $config = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
+    $config = Get-Content -LiteralPath $configPath -Raw -Encoding UTF8 | ConvertFrom-Json
     if ([int]$config.SchemaVersion -ne 1) {
         throw 'Unsupported configuration schema. Run Configure PokerStarsLauncher from the Start Menu again.'
     }
+    if ([string]::IsNullOrWhiteSpace([string]$config.PokerStarsUsername)) {
+        throw 'PokerStars username is missing. Run Configure PokerStarsLauncher from the Start Menu again.'
+    }
+    $savedPassword = $null
+    try {
+        $passwordPath = Join-Path $appDataRoot 'password.dpapi'
+        $savedPassword = ConvertTo-SecureString -String ([IO.File]::ReadAllText($passwordPath).Trim())
+        if ($savedPassword.Length -eq 0) { throw 'The saved password is empty.' }
+    }
+    catch { throw 'The saved password is missing or cannot be decrypted under this Windows account. Run Configure PokerStarsLauncher from the Start Menu again.' }
+    finally { if ($null -ne $savedPassword) { $savedPassword.Dispose() } }
 
     $launchItems = @(
-        [PSCustomObject]@{ Name = 'PokerStars updater'; Path = [string]$config.Applications.PokerStarsUpdater },
-        [PSCustomObject]@{ Name = 'Xeester updater'; Path = [string]$config.Applications.XeesterUpdater },
-        [PSCustomObject]@{ Name = 'StarsCaption'; Path = [string]$config.Applications.StarsCaption }
+        [PSCustomObject]@{ Name = 'PokerStars updater'; Path = [string]$config.Applications.PokerStarsUpdater; Application = 'PokerStars.exe'; IsUpdater = $true },
+        [PSCustomObject]@{ Name = 'Xeester updater'; Path = [string]$config.Applications.XeesterUpdater; Application = 'jre\bin\xeester.exe'; IsUpdater = $true },
+        [PSCustomObject]@{ Name = 'StarsCaption'; Path = [string]$config.Applications.StarsCaption; Application = ''; IsUpdater = $false }
     )
 
     foreach ($item in $launchItems) {
         if ([string]::IsNullOrWhiteSpace($item.Path) -or -not (Test-Path -LiteralPath $item.Path -PathType Leaf)) {
             throw "Configured executable for $($item.Name) was not found: $($item.Path). Run Configure PokerStarsLauncher from the Start Menu to correct it."
         }
+        $item.Path = [IO.Path]::GetFullPath($item.Path)
     }
 
     # The login helper intentionally targets only a PokerStars process created
@@ -293,7 +134,7 @@ try {
     }
 
     $nativeError = $null
-    $jobHandle = [PokerStarsLauncherProcessJob]::Create([ref]$nativeError)
+    $jobHandle = [PokerStarsLauncherProcessJob]::Create($jobName, [ref]$nativeError)
     if ($jobHandle -eq [IntPtr]::Zero) {
         throw "Could not create the process job used for failure cleanup: $nativeError"
     }
@@ -318,11 +159,15 @@ try {
             Name = $item.Name
             ProcessId = [int]$processId
             ProcessHandleId = [int]$processHandleId
+            ApplicationPath = $(if ($item.IsUpdater) { Join-Path $applicationWorkingDirectory $item.Application } else { $item.Path })
+            IsUpdater = $item.IsUpdater
+            ExitObservedAt = -1.0
+            HandoffLogged = $false
         }
         Write-LauncherLog "Started $($item.Name): $($item.Path) (PID $processId)."
     }
 
-    $loginArguments = '-NoLogo -NoProfile -STA -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $loginScript + '" -RunStartedUtc "' + $runStartedUtcText + '"'
+    $loginArguments = '-NoLogo -NoProfile -STA -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $loginScript + '" -RunStartedUtc "' + $runStartedUtcText + '" -JobName "' + $jobName + '" -PokerStarsPath "' + $rootProcesses[0].ApplicationPath + '"'
     $loginProcessId = 0
     $loginProcessHandleId = 0
     $loginStarted = [PokerStarsLauncherProcessJob]::StartProcess(
@@ -335,15 +180,13 @@ try {
     Write-LauncherLog "Started PokerStars login helper (PID $loginProcessId)."
 
     while ($true) {
+        if ($startupTimer.Elapsed.TotalSeconds -ge $startupTimeoutSeconds) {
+            throw "Application startup and PokerStars login did not complete within $startupTimeoutSeconds seconds. See launcher.log and login.log for the last observed state."
+        }
+        $allApplicationsRunning = $true
         foreach ($root in $rootProcesses) {
-            [uint32]$rootExitCode = 0
-            $rootError = $null
-            $rootExited = [PokerStarsLauncherProcessJob]::HasExited(
-                [int]$root.ProcessHandleId, [int]$root.ProcessId, [ref]$rootExitCode, [ref]$rootError
-            )
-            if (-not [string]::IsNullOrWhiteSpace($rootError)) { throw $rootError }
-            if ($rootExited -and $rootExitCode -ne 0) {
-                throw "$($root.Name) exited with code $rootExitCode."
+            if (-not (Test-LauncherApplication -Root $root -Job $jobHandle -ElapsedSeconds $startupTimer.Elapsed.TotalSeconds)) {
+                $allApplicationsRunning = $false
             }
         }
 
@@ -357,21 +200,9 @@ try {
             if ($loginExitCode -ne 0) {
                 throw "PokerStars login helper failed with exit code $loginExitCode. See '$((Join-Path $logDirectory 'login-error.txt'))'."
             }
-            break
+            if ($allApplicationsRunning) { break }
         }
         Start-Sleep -Milliseconds 300
-    }
-
-    foreach ($root in $rootProcesses) {
-        [uint32]$rootExitCode = 0
-        $rootError = $null
-        $rootExited = [PokerStarsLauncherProcessJob]::HasExited(
-            [int]$root.ProcessHandleId, [int]$root.ProcessId, [ref]$rootExitCode, [ref]$rootError
-        )
-        if (-not [string]::IsNullOrWhiteSpace($rootError)) { throw $rootError }
-        if ($rootExited -and $rootExitCode -ne 0) {
-            throw "$($root.Name) exited with code $rootExitCode."
-        }
     }
 
     Write-LauncherLog 'Launcher completed successfully. Applications remain running.'

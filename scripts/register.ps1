@@ -1,6 +1,6 @@
 $ErrorActionPreference = 'Stop'
 
-$appDirectory = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+$appDirectory = (Resolve-Path (Join-Path $PSScriptRoot '..')).ProviderPath
 $launcherPath = Join-Path $appDirectory 'PokerStarsLauncher.exe'
 $versionPath = Join-Path $appDirectory 'version.txt'
 $iconPath = Join-Path $appDirectory 'assets\PokerStarsLauncher.ico'

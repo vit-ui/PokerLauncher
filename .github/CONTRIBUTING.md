@@ -15,6 +15,7 @@ The installed application does not require Go, Git, Inno Setup, or a separate .N
 - `scripts/register.ps1`: refreshes shortcuts and the per-user Windows uninstall registration.
 - `scripts/setup.ps1`: first-run and repeat configuration UI and DPAPI credential storage.
 - `scripts/launch.ps1`: elevated process controller and Windows Job Object failure cleanup.
+- `scripts/ProcessJob.ps1`: shared native process creation, job ownership, and executable identity checks for the controller and login helper.
 - `scripts/PokerStarsLogin.ps1`: native PokerStars login-form detection, field verification, and confirmed Login-button notification.
 - `scripts/uninstall.ps1`: user-facing uninstall confirmation and delayed removal of the installed files.
 - `assets/`: resources embedded into the executable. Place the supplied shortcut icon at `assets/PokerStarsLauncher.ico`.
@@ -45,7 +46,7 @@ $env:GOARCH = 'amd64'
 go build -trimpath -ldflags '-s -w -H=windowsgui -X main.version=0.1.0-dev' -o PokerStarsLauncher.exe .
 ```
 
-The PowerShell validation parses every runtime script and compiles the embedded C# Windows API declarations. CI performs the same checks and builds the Windows executable. Actual interaction with PokerStars, Xeester, StarsCaption, UAC, and the process cleanup behavior still requires a Windows test machine.
+The PowerShell validation parses every runtime script, checks cmdlet parameter sets, compiles the embedded C# Windows API declarations, and runs `tests/Test-LauncherRuntime.ps1`. That suite uses synthetic apps and isolated configuration to test updater exit codes and handoffs, delayed descendants, job/path ownership, process cleanup, complete controller success/failure/timeout paths, UTF-8 paths, and both deferred uninstall data choices through the real PowerShell 5.1 command line. Windows Go tests verify installation and updates extract all current embedded resources, replace stale executables/scripts, and preserve saved configuration and credentials. CI performs the same checks, runs actionlint on the workflows, and builds the Windows executable. Interaction with the real PokerStars, Xeester, StarsCaption, and UAC dialogs still requires a manual Windows test.
 
 ## Commit conventions
 
@@ -53,10 +54,10 @@ Use Conventional Commits. Commitizen validates commit messages; Lefthook runs Gi
 
 ## Release process
 
-1. Merge Conventional Commit changes to `master`.
+1. Merge Conventional Commit changes to `master`. The release workflow calls the complete merge-safety workflow and waits for all its checks before running Release Please.
 2. Review and merge the Release Please pull request.
 3. Release Please creates the version tag and GitHub Release.
-4. A dependent Windows job in the same workflow run builds `PokerStarsLauncher.exe`, calculates its SHA-256 checksum, and attaches both files to that release.
+4. A dependent Windows job in the same workflow run checks out the release tag, repeats Go and PowerShell validation, builds `PokerStarsLauncher.exe`, calculates its SHA-256 checksum, and attaches both files to that release. Go tests, vet, and PowerShell validation use separate steps so one successful command cannot hide another command's failure.
 5. Verify the release asset and test the published executable on Windows before announcing the release.
 
 The release workflow currently targets Windows x64. Do not publish a release without the `PokerStarsLauncher.exe` asset.

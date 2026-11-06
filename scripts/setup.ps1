@@ -3,7 +3,7 @@ $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 
-$appDirectory = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+$appDirectory = (Resolve-Path (Join-Path $PSScriptRoot '..')).ProviderPath
 $appDataRoot = Join-Path $env:APPDATA 'PokerStarsLauncher'
 $configPath = Join-Path $appDataRoot 'config.json'
 $passwordPath = Join-Path $appDataRoot 'password.dpapi'
@@ -11,7 +11,7 @@ $passwordPath = Join-Path $appDataRoot 'password.dpapi'
 function Read-ExistingConfiguration {
     if (-not (Test-Path -LiteralPath $configPath -PathType Leaf)) { return $null }
     try {
-        return (Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json)
+        return (Get-Content -LiteralPath $configPath -Raw -Encoding UTF8 | ConvertFrom-Json)
     }
     catch {
         throw "The existing configuration is invalid: $($_.Exception.Message)`r`nMove or delete '$configPath' only if you intend to configure the application from scratch."

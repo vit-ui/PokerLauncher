@@ -1,7 +1,7 @@
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Windows.Forms
 
-$appDirectory = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+$appDirectory = (Resolve-Path (Join-Path $PSScriptRoot '..')).ProviderPath
 $appDataRoot = Join-Path $env:APPDATA 'PokerStarsLauncher'
 $localDataRoot = Join-Path $env:LOCALAPPDATA 'PokerStarsLauncher'
 $desktopShortcut = Join-Path ([Environment]::GetFolderPath('DesktopDirectory')) 'PokerStars Launcher.lnk'
@@ -28,7 +28,7 @@ param(
     [string]$ApplicationDirectory,
     [string]$AppDataDirectory,
     [string]$LocalDataDirectory,
-    [bool]$RemoveUserData,
+    [ValidateSet('True', 'False')][string]$RemoveUserData,
     [string]$SelfPath
 )
 
@@ -40,7 +40,7 @@ catch { }
 
 Start-Sleep -Milliseconds 300
 Remove-Item -LiteralPath $ApplicationDirectory -Recurse -Force -ErrorAction SilentlyContinue
-if ($RemoveUserData) {
+if ($RemoveUserData -eq 'True') {
     Remove-Item -LiteralPath $AppDataDirectory -Recurse -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $LocalDataDirectory -Recurse -Force -ErrorAction SilentlyContinue
 }

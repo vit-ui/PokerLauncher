@@ -6,7 +6,13 @@ permissions:
   contents: write
   pull-requests: write
 jobs:
+  validate:
+    uses: ./.github/workflows/core-merge_safety.yml
+    permissions:
+      contents: read
+
   release-please:
+    needs: validate
     runs-on: ubuntu-latest
     outputs:
       release_created: ${{ steps.release.outputs.release_created }}
@@ -32,12 +38,15 @@ jobs:
         with:
           go-version: '1.27.3'
           check-latest: false
-      - name: Validate Go and PowerShell sources
+      - name: Test Go application from release tag
         shell: powershell
-        run: |
-          go test ./...
-          go vet ./...
-          ./tests/Validate-Project.ps1
+        run: go test ./...
+      - name: Vet Go application from release tag
+        shell: powershell
+        run: go vet ./...
+      - name: Validate PowerShell runtime from release tag
+        shell: powershell
+        run: ./tests/Validate-Project.ps1
       - name: Build self-installing executable
         shell: bash
         run: |

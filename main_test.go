@@ -9,6 +9,7 @@ func TestEmbeddedPowerShellComponents(t *testing.T) {
 	required := []string{
 		"scripts/setup.ps1",
 		"scripts/launch.ps1",
+		"scripts/ProcessJob.ps1",
 		"scripts/PokerStarsLogin.ps1",
 		"scripts/register.ps1",
 		"scripts/uninstall.ps1",

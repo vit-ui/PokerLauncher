@@ -4,11 +4,11 @@ if ($PSVersionTable.PSVersion.Major -ne 5 -or $PSVersionTable.PSEdition -ne 'Des
     throw 'Run this validation with Windows PowerShell 5.1 (the launcher runtime).'
 }
 
-$repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+$repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).ProviderPath
 $scriptDirectory = Join-Path $repoRoot 'scripts'
 $scriptFiles = @(Get-ChildItem -LiteralPath $scriptDirectory -Filter '*.ps1' -File -Recurse)
-if ($scriptFiles.Count -lt 5) {
-    throw 'Expected setup, registration, launch, login, and uninstall PowerShell components under scripts/.'
+if ($scriptFiles.Count -lt 6) {
+    throw 'Expected setup, registration, launch, process-job, login, and uninstall PowerShell components under scripts/.'
 }
 
 $parseFailures = @()
@@ -94,7 +94,7 @@ foreach ($file in $scriptFiles) {
         }
     }
 
-    # The launch/login scripts embed C# native API declarations in here-strings.
+    # The process-job/login scripts embed C# native declarations in here-strings.
     # The uninstall script also carries PowerShell source as a here-string; only
     # compile blocks that are recognizably C# declarations.
     $hereStrings = @($tokens | Where-Object {
@@ -124,6 +124,7 @@ $requiredFiles = @(
     'scripts/setup.ps1',
     'scripts/register.ps1',
     'scripts/launch.ps1',
+    'scripts/ProcessJob.ps1',
     'scripts/PokerStarsLogin.ps1',
     'scripts/uninstall.ps1',
     'assets/README.md',
@@ -149,7 +150,7 @@ if ($unexpectedUserLaunchers.Count -gt 0) {
 # launch.ps1. This catches P/Invoke/signature and process-assignment failures
 # that parsing and Add-Type compilation cannot detect.
 $jobError = $null
-$job = [PokerStarsLauncherProcessJob]::Create([ref]$jobError)
+$job = [PokerStarsLauncherProcessJob]::Create($null, [ref]$jobError)
 if ($job -eq [IntPtr]::Zero) {
     throw "Windows Job Object runtime test could not create a job: $jobError"
 }
@@ -195,7 +196,7 @@ $uninstallSource = Get-Content -LiteralPath (Join-Path $scriptDirectory 'uninsta
 foreach ($requiredPattern in @(
     'DialogResult]::Cancel',
     '$removeUserData = $choice -eq [System.Windows.Forms.DialogResult]::Yes',
-    'if ($RemoveUserData)',
+    "if (`$RemoveUserData -eq 'True')",
     '$parent.WaitForExit()',
     'Remove-Item -LiteralPath $ApplicationDirectory -Recurse -Force'
 )) {
@@ -205,3 +206,5 @@ foreach ($requiredPattern in @(
 }
 
 Write-Host ("Validated Windows PowerShell 5.1 syntax, cmdlet parameter sets, {0} embedded C# declarations, a live Windows Job Object child process, uninstall behavior, and required project files across {1} scripts." -f $csharpTypesCompiled, $scriptFiles.Count)
+
+& (Join-Path $PSScriptRoot 'Test-LauncherRuntime.ps1')
