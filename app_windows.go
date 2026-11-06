@@ -364,6 +364,24 @@ func closeHandle(handle uintptr) {
 	}
 }
 
+func powerShellProcessOptions(scriptName, scriptPath string) ([]string, *syscall.SysProcAttr) {
+	// Setup and uninstall display Windows Forms dialogs. CREATE_NO_WINDOW
+	// suppresses PowerShell's console without hiding GUI windows. Do not set
+	// HideWindow/SW_HIDE for these interactive scripts.
+	interactive := scriptName == "setup.ps1" || scriptName == "uninstall.ps1"
+	arguments := []string{"-NoLogo", "-NoProfile", "-STA", "-ExecutionPolicy", "Bypass"}
+	if !interactive {
+		arguments = append(arguments, "-WindowStyle", "Hidden")
+	}
+	arguments = append(arguments, "-File", scriptPath)
+
+	attributes := &syscall.SysProcAttr{CreationFlags: createNoWindow}
+	if !interactive {
+		attributes.HideWindow = true
+	}
+	return arguments, attributes
+}
+
 func runPowerShell(scriptName string) error {
 	executable, err := os.Executable()
 	if err != nil {
@@ -379,19 +397,10 @@ func runPowerShell(scriptName string) error {
 	// without a console, but do not set STARTF_USESHOWWINDOW/SW_HIDE: that
 	// startup hint can also hide the WinForms dialog created by the script.
 	// CREATE_NO_WINDOW suppresses the console while leaving GUI windows visible.
-	interactive := scriptName == "setup.ps1" || scriptName == "uninstall.ps1"
-	arguments := []string{"-NoLogo", "-NoProfile", "-STA", "-ExecutionPolicy", "Bypass"}
-	if !interactive {
-		arguments = append(arguments, "-WindowStyle", "Hidden")
-	}
-	arguments = append(arguments, "-File", scriptPath)
-
+	arguments, processAttributes := powerShellProcessOptions(scriptName, scriptPath)
 	command := exec.Command(powerShell, arguments...)
 	command.Dir = filepath.Dir(executable)
-	command.SysProcAttr = &syscall.SysProcAttr{CreationFlags: createNoWindow}
-	if !interactive {
-		command.SysProcAttr.HideWindow = true
-	}
+	command.SysProcAttr = processAttributes
 	command.Env = append(os.Environ(), fmt.Sprintf("POKERSTARSL_PARENT_PID=%d", os.Getpid()))
 	output, err := command.CombinedOutput()
 	if err != nil {
