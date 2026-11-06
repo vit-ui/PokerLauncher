@@ -33,6 +33,16 @@ function Test-FixtureProcessPath {
     catch [InvalidOperationException] { return $false }
 }
 
+function Start-UnownedTestApplication {
+    param([string]$Path)
+    $options = New-Object Diagnostics.ProcessStartInfo
+    $options.FileName = $Path
+    $options.Arguments = 'sleep'
+    $options.UseShellExecute = $false
+    $options.CreateNoWindow = $true
+    return [Diagnostics.Process]::Start($options)
+}
+
 function New-TestJob {
     $jobError = $null
     $job = [PokerStarsLauncherProcessJob]::Create(('Local\PSL-test-' + [Guid]::NewGuid().ToString('N')), [ref]$jobError)
@@ -160,7 +170,7 @@ public static class PSLRuntimeFixture {
 
     # Neither an unrelated process nor a same-name app in another directory
     # can hide a genuine updater failure. Zero without an app also fails.
-    $outsideProcess = Start-Process -FilePath $appExe -ArgumentList 'sleep' -PassThru -WindowStyle Hidden
+    $outsideProcess = Start-UnownedTestApplication $appExe
     foreach ($code in @(0, 2, 7)) {
         $failedJob = New-TestJob
         $failed = Start-TestRoot $failedJob "exit $code" $appExe
@@ -217,7 +227,7 @@ public static class PSLRuntimeFixture {
         "-Name 'PokerStars' -ErrorAction SilentlyContinue | Where-Object { `$_.Path -and `$_.Path.StartsWith(`$env:PSL_TEST_CASE_ROOT, [StringComparison]::OrdinalIgnoreCase) })")
     $testController = $testController.Replace('[int]$HandoffTimeoutSeconds = 30', '[int]$HandoffTimeoutSeconds = 1')
     $testController = $testController.Replace('$startupTimeoutSeconds = 240', '$startupTimeoutSeconds = 10')
-    foreach ($scenario in @('success', 'start-failure', 'updater-failure', 'login-failure', 'hung-helper')) {
+    foreach ($scenario in @('success', 'already-running', 'start-failure', 'updater-failure', 'login-failure', 'hung-helper')) {
         $caseRoot = Join-Path $testRoot ($scenario + '-' + [char]0x00E9)
         $scriptDir = Join-Path $caseRoot 'scripts'
         $appsDir = Join-Path $caseRoot 'apps'
@@ -272,11 +282,25 @@ exit $LASTEXITCODE
 '@
         $wrapperPath = Join-Path $caseRoot 'run.ps1'
         [IO.File]::WriteAllText($wrapperPath, $wrapper)
+        $existingSession = $null
+        if ($scenario -eq 'already-running') {
+            $existingSession = Start-UnownedTestApplication (Join-Path $appsDir 'PokerStars.exe')
+        }
         $output = & $powerShell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $wrapperPath -CaseRoot $caseRoot -Scenario $scenario 2>&1
         $controllerExit = $LASTEXITCODE
-        Assert-True ($controllerExit -eq $(if ($scenario -eq 'success') { 0 } else { 1 })) "Controller scenario '$scenario' returned $controllerExit`: $output"
+        $expectedExit = switch ($scenario) { 'success' { 0 }; 'already-running' { 2 }; default { 1 } }
+        Assert-True ($controllerExit -eq $expectedExit) "Controller scenario '$scenario' returned $controllerExit`: $output"
         $controllerLog = Get-Content -LiteralPath (Join-Path $caseRoot 'local\PokerStarsLauncher\logs\launcher.log') -Raw
-        if ($scenario -eq 'success') {
+        if ($scenario -eq 'already-running') {
+            Assert-True ($controllerLog -like '*Launch skipped: PokerStars is already running*') 'Already-running session was not recorded as an expected skipped launch.'
+            Assert-True ($controllerLog -notlike '*LAUNCHER FAILURE*' -and $controllerLog -notlike '*Started *' -and $controllerLog -notlike '*terminated*') 'Already-running session must not trigger startup or failure cleanup.'
+            $existingSession.Refresh()
+            Assert-True (-not $existingSession.HasExited) 'The existing PokerStars session was interrupted.'
+            $existingSession.Kill()
+            $existingSession.WaitForExit()
+            $existingSession.Dispose()
+        }
+        elseif ($scenario -eq 'success') {
             Assert-True ($controllerLog -like '*Launcher completed successfully*') "Controller did not confirm successful startup. Output: $output Log: $controllerLog"
         }
         else {

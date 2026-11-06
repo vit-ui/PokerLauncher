@@ -4,12 +4,65 @@ package main
 
 import (
 	"bytes"
+	"errors"
+	"fmt"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 )
+
+func TestAlreadyRunningDialogExplainsNextStepWithoutOldFailures(t *testing.T) {
+	t.Setenv("LOCALAPPDATA", t.TempDir())
+	logDir := filepath.Join(os.Getenv("LOCALAPPDATA"), "PokerStarsLauncher", "logs")
+	if err := os.MkdirAll(logDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"launcher.log", "login-error.txt"} {
+		if err := os.WriteFile(filepath.Join(logDir, name), []byte("OLD LAUNCHER FAILURE: previous updater error"), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	title, message, flags := launchErrorDialog(fmt.Errorf("controller: %w", errPokerStarsAlreadyRunning))
+	if title != "PokerStars is already running" || flags != mbOK|mbIconInformation {
+		t.Fatalf("expected an informational already-running dialog, got %q, flags %#x", title, flags)
+	}
+	for _, required := range []string{"Close PokerStars", "open PokerStars Launcher again", "current session has been left running"} {
+		if !strings.Contains(message, required) {
+			t.Errorf("dialog is missing %q: %s", required, message)
+		}
+	}
+	for _, unwanted := range []string{"OLD", "FAILURE", "launcher.log", "exit status", "line 133"} {
+		if strings.Contains(message, unwanted) {
+			t.Errorf("already-running dialog includes irrelevant diagnostics %q", unwanted)
+		}
+	}
+	_, failureMessage, failureFlags := launchErrorDialog(errors.New("real startup failure"))
+	if failureFlags != mbOK|mbIconError || !strings.Contains(failureMessage, "real startup failure") {
+		t.Fatal("genuine errors must retain their failure dialog and diagnostics")
+	}
+}
+
+func TestPowerShellExitStatusDistinguishesAlreadyRunningFromFailures(t *testing.T) {
+	powerShell := filepath.Join(os.Getenv("SystemRoot"), "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
+	for _, code := range []string{"1", "2"} {
+		command := exec.Command(powerShell, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "exit "+code)
+		command.SysProcAttr = &syscall.SysProcAttr{CreationFlags: createNoWindow, HideWindow: true}
+		processError := command.Run()
+		if processError == nil {
+			t.Fatal("expected a nonzero PowerShell exit status")
+		}
+		for _, script := range []string{"launch.ps1", "setup.ps1", "uninstall.ps1"} {
+			err := powerShellResultError(script, []byte("diagnostic output"), processError)
+			if got, want := errors.Is(err, errPokerStarsAlreadyRunning), script == "launch.ps1" && code == "2"; got != want {
+				t.Errorf("%s exit %s: already-running classification = %v, want %v", script, code, got, want)
+			}
+		}
+	}
+}
 
 func TestInstallAndUpdateExtractCurrentPackageAndPreserveUserData(t *testing.T) {
 	profile := filepath.Join(t.TempDir(), "profile")

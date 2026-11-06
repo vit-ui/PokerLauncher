@@ -31,7 +31,7 @@ The setup wizard is available later from **Start Menu → PokerStarsLauncher →
 
 ## Launch behavior
 
-Close any existing PokerStars process first, then use the Desktop shortcut or the Start Menu launcher. The launcher refuses to start if `PokerStars.exe` is already running, because login automation must target the process created by that launch. Windows shows one UAC prompt. After approval, the application:
+Close any existing PokerStars process first, then use the Desktop shortcut or the Start Menu launcher. If `PokerStars.exe` is already running, the launcher shows an informational "PokerStars is already running" dialog. It explains that you can close PokerStars when ready and launch again, and that your current session has been left running. This expected condition does not show a failure screen or old diagnostic logs. Login automation must target the process created by that launch. Windows shows one UAC prompt. After approval, the application:
 
 1. Starts `PokerStarsUpdate.exe`.
 2. Starts `xeester-update.exe`.

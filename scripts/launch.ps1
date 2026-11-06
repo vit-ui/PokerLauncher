@@ -130,7 +130,9 @@ try {
     # a process the launcher does not own.
     $existingPokerStars = @(Get-Process -Name 'PokerStars' -ErrorAction SilentlyContinue)
     if ($existingPokerStars.Count -gt 0) {
-        throw 'PokerStars is already running. Close every PokerStars window and process, then run the launcher again.'
+        Write-LauncherLog 'Launch skipped: PokerStars is already running. Existing applications were left running.'
+        Write-Host 'PokerStars is already running. Close PokerStars when you are ready, then open PokerStars Launcher again.'
+        exit 2 # Expected condition; the Go host shows an informational dialog.
     }
 
     $nativeError = $null

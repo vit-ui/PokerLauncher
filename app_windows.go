@@ -26,6 +26,10 @@ const (
 	tokenElevation        = 20
 )
 
+const launcherAlreadyRunningExitCode = 2
+
+var errPokerStarsAlreadyRunning = errors.New("PokerStars is already running")
+
 type shellExecuteInfo struct {
 	cbSize       uint32
 	fMask        uint32
@@ -73,10 +77,7 @@ func run() error {
 		if !isElevated() {
 			return fmt.Errorf("the elevated launcher entry point was invoked without administrator privileges")
 		}
-		if err := runPowerShell("launch.ps1"); err != nil {
-			showMessage("PokerStarsLauncher", formatLaunchError(err), mbOK|mbIconError)
-			return nil // The elevated child already showed the user-facing error.
-		}
+		runLauncherController()
 		return nil
 	}
 
@@ -261,7 +262,8 @@ func samePath(left, right string) bool {
 
 func launchElevated() error {
 	if isElevated() {
-		return runPowerShell("launch.ps1")
+		runLauncherController()
+		return nil
 	}
 
 	executable, err := os.Executable()
@@ -403,7 +405,15 @@ func runPowerShell(scriptName string) error {
 	command.SysProcAttr = processAttributes
 	command.Env = append(os.Environ(), fmt.Sprintf("POKERSTARSL_PARENT_PID=%d", os.Getpid()))
 	output, err := command.CombinedOutput()
+	return powerShellResultError(scriptName, output, err)
+}
+
+func powerShellResultError(scriptName string, output []byte, err error) error {
 	if err != nil {
+		var exitError *exec.ExitError
+		if scriptName == "launch.ps1" && errors.As(err, &exitError) && exitError.ExitCode() == launcherAlreadyRunningExitCode {
+			return errPokerStarsAlreadyRunning
+		}
 		trimmed := strings.TrimSpace(string(output))
 		if trimmed != "" {
 			return fmt.Errorf("%s failed: %w\n%s", scriptName, err, trimmed)
@@ -411,6 +421,22 @@ func runPowerShell(scriptName string) error {
 		return fmt.Errorf("%s failed: %w", scriptName, err)
 	}
 	return nil
+}
+
+func runLauncherController() {
+	if err := runPowerShell("launch.ps1"); err != nil {
+		title, message, flags := launchErrorDialog(err)
+		showMessage(title, message, flags)
+	}
+}
+
+func launchErrorDialog(err error) (string, string, uintptr) {
+	if errors.Is(err, errPokerStarsAlreadyRunning) {
+		return "PokerStars is already running",
+			"Close PokerStars when you're ready, then open PokerStars Launcher again.\r\n\r\nYour current session has been left running.",
+			mbOK | mbIconInformation
+	}
+	return "PokerStarsLauncher", formatLaunchError(err), mbOK | mbIconError
 }
 
 func formatLaunchError(err error) string {
