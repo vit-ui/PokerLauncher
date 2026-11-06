@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here. Release Please updates this file from Conventional Commit messages.
 
+## [1.0.7](https://github.com/vit-ui/PokerStarsLauncher/compare/v1.0.6...v1.0.7) (2026-11-06)
+
+
+### Bug Fixes
+
+* show a clear notice when PokerStars is already running ([84ddd52](https://github.com/vit-ui/PokerStarsLauncher/commit/84ddd52e73270f2b7c6642e3ff7eaadd2becdaa3))
+
 ## [1.0.6](https://github.com/vit-ui/PokerStarsLauncher/compare/v1.0.5...v1.0.6) (2026-11-06)
 
 
