@@ -16,13 +16,30 @@ $csharpTypesCompiled = 0
 foreach ($file in $scriptFiles) {
     $tokens = $null
     $parseErrors = $null
-    [void][System.Management.Automation.Language.Parser]::ParseFile(
+    $ast = [System.Management.Automation.Language.Parser]::ParseFile(
         $file.FullName,
         [ref]$tokens,
         [ref]$parseErrors
     )
     foreach ($parseError in $parseErrors) {
         $parseFailures += ('{0}:{1}:{2}: {3}' -f $file.FullName, $parseError.Extent.StartLineNumber, $parseError.Extent.StartColumnNumber, $parseError.Message)
+    }
+
+    # In Windows PowerShell 5.1, Split-Path -LiteralPath and -Parent belong
+    # to incompatible parameter sets. Detect this at validation time rather
+    # than letting the affected application fail only during first launch.
+    $splitPathCommands = $ast.FindAll({
+        param($node)
+        $node -is [System.Management.Automation.Language.CommandAst] -and
+            $node.GetCommandName() -eq 'Split-Path'
+    }, $true)
+    foreach ($command in $splitPathCommands) {
+        $parameterNames = @($command.CommandElements |
+            Where-Object { $_ -is [System.Management.Automation.Language.CommandParameterAst] } |
+            ForEach-Object { $_.ParameterName })
+        if ($parameterNames -contains 'LiteralPath' -and $parameterNames -contains 'Parent') {
+            $parseFailures += ('{0}:{1}: Split-Path cannot combine -LiteralPath with -Parent in Windows PowerShell 5.1.' -f $file.FullName, $command.Extent.StartLineNumber)
+        }
     }
 
     # The launch/login scripts embed C# native API declarations in here-strings.
