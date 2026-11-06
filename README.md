@@ -74,7 +74,9 @@ $env:GOARCH = 'amd64'
 go build -trimpath -ldflags '-s -w -H=windowsgui -X main.version=0.1.0-dev' -o PokerStarsLauncher.exe .
 ```
 
-The Release Please workflow creates the release and, in a dependent Windows job in that same workflow run, builds the executable and attaches it to that GitHub Release. This avoids relying on a tag-push event created by the workflow token to trigger a separate workflow. The repository retains the `proinit` scaffold/workflow/commit conventions: Conventional Commits, Commitizen, Lefthook, Gitleaks, merge-safety checks, and Release Please. It does not create or push a remote as part of local project setup.
+The Release Please workflow creates the release and, in a dependent Windows job in that same workflow run, builds the executable and attaches it to that GitHub Release. This avoids relying on a tag-push event created by the workflow token to trigger a separate workflow. The Windows validation job runs on Windows PowerShell 5.1, matching the launcher runtime. It parses every shipped script, validates named cmdlet parameters against the real PowerShell parameter sets, compiles embedded native declarations, and runs a native Windows Job Object child-process smoke test. Go tests also verify that setup and uninstall start PowerShell without a console while leaving their Windows Forms dialogs visible, and that background scripts remain hidden. The validation checks the uninstall data-preservation contract so the optional removal of DPAPI credentials and configuration cannot silently regress.
+
+The repository retains the `proinit` scaffold/workflow/commit conventions: Conventional Commits, Commitizen, Lefthook, Gitleaks, merge-safety checks, and Release Please. It does not create or push a remote as part of local project setup.
 
 ## License and affiliation
 
