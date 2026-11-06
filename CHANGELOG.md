@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here. Release Please updates this file from Conventional Commit messages.
 
+## [1.0.8](https://github.com/vit-ui/PokerStarsLauncher/compare/v1.0.7...v1.0.8) (2026-11-06)
+
+
+### Bug Fixes
+
+* handle normal app closure and finish updates before launching ([feefc87](https://github.com/vit-ui/PokerStarsLauncher/commit/feefc8705ac35280f5232d354ae32fbc066abaa9))
+
 ## [1.0.7](https://github.com/vit-ui/PokerStarsLauncher/compare/v1.0.6...v1.0.7) (2026-11-06)
 
 
