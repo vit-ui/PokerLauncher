@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here. Release Please updates this file from Conventional Commit messages.
 
+## [1.0.3](https://github.com/vit-ui/PokerStarsLauncher/compare/v1.0.2...v1.0.3) (2026-11-06)
+
+
+### Bug Fixes
+
+* use compatible path handling in launcher ([c97345b](https://github.com/vit-ui/PokerStarsLauncher/commit/c97345bc18eb31188a423c2c814aa19fd5535c07))
+
 ## [1.0.2](https://github.com/vit-ui/PokerStarsLauncher/compare/v1.0.1...v1.0.2) (2026-11-06)
 
 
