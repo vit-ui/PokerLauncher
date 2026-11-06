@@ -94,6 +94,10 @@ func TestUpgradeRefreshesRegistrationWithoutUninstall(t *testing.T) {
 	if err := installOrUpdate(installDir); err != nil {
 		t.Fatal(err)
 	}
+	proofName := "upgrade-location-proof.txt"
+	if err := os.WriteFile(filepath.Join(installDir, proofName), []byte("upgrade fixture"), 0644); err != nil {
+		t.Fatal(err)
+	}
 	source, err := embeddedResources.ReadFile("scripts/register.ps1")
 	if err != nil {
 		t.Fatal(err)
@@ -119,10 +123,12 @@ try {
 ` + registration + "\r\n" + `
     $entry = Get-ItemProperty -LiteralPath $testRegistry
     if ($entry.DisplayVersion -ne ` + literal(version) + `) { throw 'Windows Apps kept the old version.' }
-    if ($entry.InstallLocation -ne ` + literal(installDir) + `) { throw 'Incorrect installation registration.' }
+    if (-not (Test-Path -LiteralPath (Join-Path $entry.InstallLocation ` + literal(proofName) + `) -PathType Leaf)) { throw "Incorrect installation registration: $($entry.InstallLocation)" }
     $shell = New-Object -ComObject WScript.Shell
     $shortcut = $shell.CreateShortcut(` + literal(filepath.Join(desktop, "PokerStars Launcher.lnk")) + `)
-    if ($shortcut.TargetPath -ne ` + literal(filepath.Join(installDir, "PokerStarsLauncher.exe")) + ` -or $shortcut.Arguments -ne '--launch') { throw 'The launch shortcut was not refreshed.' }
+    if ([IO.Path]::GetFileName($shortcut.TargetPath) -ne 'PokerStarsLauncher.exe' -or
+        -not (Test-Path -LiteralPath (Join-Path ([IO.Path]::GetDirectoryName($shortcut.TargetPath)) ` + literal(proofName) + `) -PathType Leaf) -or
+        $shortcut.Arguments -ne '--launch') { throw "The launch shortcut was not refreshed: $($shortcut.TargetPath)" }
 }
 finally { Remove-Item -LiteralPath $testRegistry -Recurse -Force -ErrorAction SilentlyContinue }
 `
