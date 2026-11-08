@@ -96,11 +96,15 @@ func run() error {
 		if err := installOrUpdate(installDir); err != nil {
 			return err
 		}
-		if err := runPowerShellInDirectory(installDir, "migrate.ps1"); err != nil {
-			return fmt.Errorf("migrating existing settings: %w", err)
+		recoverSettings, err := prepareInstalledSettings(installDir)
+		if err != nil {
+			return err
 		}
-		if err := runPowerShellInDirectory(installDir, "register.ps1"); err != nil {
-			return fmt.Errorf("refreshing application shortcuts and uninstall registration: %w", err)
+		if recoverSettings {
+			// Run settings directly from the installed resources, including when
+			// invoked from a downloaded copy. Do not retire the legacy install
+			// until the user has saved a replacement configuration.
+			return runSetupInDirectory(installDir)
 		}
 		targetExe := filepath.Join(installDir, "PokerLauncher.exe")
 		sourceExe, err := os.Executable()
@@ -138,6 +142,29 @@ func run() error {
 	default:
 		return fmt.Errorf("unknown command-line option: %s", mode)
 	}
+}
+
+// A failed migration must leave a usable Settings recovery path. Registration
+// retires legacy entries, so defer it until recovery has saved a configuration.
+func prepareInstalledSettings(directory string) (bool, error) {
+	if err := runPowerShellInDirectory(directory, "migrate.ps1"); err != nil {
+		logApplicationError(fmt.Errorf("migrating existing settings: %w", err))
+		return true, nil
+	}
+	if err := runPowerShellInDirectory(directory, "register.ps1"); err != nil {
+		return false, fmt.Errorf("refreshing application shortcuts and uninstall registration: %w", err)
+	}
+	return false, nil
+}
+
+func runSetupInDirectory(directory string) error {
+	if err := runPowerShellInDirectory(directory, "setup.ps1"); err != nil {
+		return err
+	}
+	if configExists() {
+		return runPowerShellInDirectory(directory, "register.ps1")
+	}
+	return nil // Cancelled recovery: leave legacy registration and data intact.
 }
 
 func runInstalledCopy(executable, argument string) error {
@@ -393,6 +420,9 @@ func runPowerShell(scriptName string) error {
 	executable, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("locating the installed application: %w", err)
+	}
+	if scriptName == "setup.ps1" {
+		return runSetupInDirectory(filepath.Dir(executable))
 	}
 	return runPowerShellInDirectory(filepath.Dir(executable), scriptName)
 }

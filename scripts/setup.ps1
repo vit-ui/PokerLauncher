@@ -64,12 +64,20 @@ function global:Edit-Program {
 }
 try {
     New-Item -ItemType Directory -Path $appDataRoot -Force | Out-Null
-    $config = Read-LauncherConfiguration $configPath
+    $legacyConfigPath = Join-Path $env:APPDATA 'PokerStarsLauncher\config.json'
+    $recoverLegacy = -not (Test-Path -LiteralPath $configPath -PathType Leaf) -and (Test-Path -LiteralPath $legacyConfigPath -PathType Leaf)
+    # Load legacy program settings read-only. Saving writes only to PokerLauncher;
+    # an unavailable legacy password must not prevent manual login or replacement.
+    $config = if ($recoverLegacy) {
+        try { Read-LauncherConfiguration $legacyConfigPath }
+        catch { Convert-LauncherConfiguration $null } # Unreadable legacy JSON: allow a fresh setup without deleting it.
+    } else { Read-LauncherConfiguration $configPath }
     $state = @{ Client = $config.PokerClient }
     $helpers = [Collections.Generic.List[object]]::new()
     foreach ($entry in @($config.Helpers)) { $helpers.Add($entry) }
     $form = [Windows.Forms.Form]::new(); $form.Text = 'PokerLauncher Settings'; $form.StartPosition = 'CenterScreen'
     $form.ClientSize = [Drawing.Size]::new(650, 620); $form.Font = [Drawing.Font]::new('Segoe UI', 9)
+    if ($recoverLegacy) { $form.Text = 'PokerLauncher Settings - recover legacy settings' }
     $form.FormBorderStyle = 'FixedDialog'; $form.MaximizeBox = $false
     Add-Label $form 'Poker client: PokerStars (the currently supported client)' 15
     $clientLabel = [Windows.Forms.Label]::new(); $clientLabel.SetBounds(18, 42, 500, 42); $form.Controls.Add($clientLabel)
@@ -102,7 +110,8 @@ try {
     $login = [Windows.Forms.CheckBox]::new(); $login.Text = 'Automatically log in to PokerStars'; $login.SetBounds(18, 345, 500, 24); $form.Controls.Add($login)
     $credentials = [Windows.Forms.Panel]::new(); $credentials.SetBounds(0, 375, 640, 150); $form.Controls.Add($credentials)
     Add-Label $credentials 'PokerStars username' 0; $username = Add-Text $credentials $config.PokerStarsUsername 22
-    Add-Label $credentials 'Password (leave blank to keep the saved password)' 56; $password = Add-Text $credentials '' 78; $password.UseSystemPasswordChar = $true
+    $passwordHint = if ($recoverLegacy) { 'Enter a replacement password, or turn off automatic login above.' } else { 'Password (leave blank to keep the saved password)' }
+    Add-Label $credentials $passwordHint 56; $password = Add-Text $credentials '' 78; $password.UseSystemPasswordChar = $true
     $login.Add_CheckedChanged({ $credentials.Visible = $login.Checked }.GetNewClosure())
     $login.Checked = $config.LoginMode -eq 'PokerStars'; $credentials.Visible = $login.Checked
     Add-Label $form 'Launching requests administrator approval. Settings can also be edited in config.json.' 530

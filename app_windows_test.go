@@ -4,6 +4,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -269,5 +270,134 @@ func TestBackgroundPowerShellScriptsRemainHidden(t *testing.T) {
 	}
 	if !strings.Contains(strings.Join(args, " "), "-WindowStyle Hidden") {
 		t.Fatal("background PowerShell must request a hidden window")
+	}
+}
+
+func TestMigrationFailureAllowsSettingsRecovery(t *testing.T) {
+	for _, credential := range []string{"missing", "invalid"} {
+		for _, action := range []string{"cancel", "manual", "password"} {
+			t.Run(credential+"/"+action, func(t *testing.T) {
+				t.Setenv("APPDATA", t.TempDir())
+				t.Setenv("LOCALAPPDATA", t.TempDir())
+				t.Setenv("POKERLAUNCHER_TEST_RECOVERY", action)
+				legacy := filepath.Join(os.Getenv("APPDATA"), "PokerStarsLauncher")
+				if err := os.MkdirAll(legacy, 0755); err != nil {
+					t.Fatal(err)
+				}
+				original := []byte(`{"SchemaVersion":1,"PokerStarsUsername":"recover-me","Applications":{"PokerStarsUpdater":"C:\\PokerStars\\PokerStarsUpdate.exe","XeesterUpdater":"C:\\Xeester\\update.exe","StarsCaption":"C:\\Caption\\caption.exe"}}`)
+				legacyConfig := filepath.Join(legacy, "config.json")
+				if err := os.WriteFile(legacyConfig, original, 0600); err != nil {
+					t.Fatal(err)
+				}
+				legacyPassword := filepath.Join(legacy, "password.dpapi")
+				if credential == "invalid" {
+					if err := os.WriteFile(legacyPassword, []byte("undecryptable"), 0600); err != nil {
+						t.Fatal(err)
+					}
+				}
+				directory := t.TempDir()
+				scripts := filepath.Join(directory, "scripts")
+				if err := os.MkdirAll(scripts, 0755); err != nil {
+					t.Fatal(err)
+				}
+				for _, name := range []string{"Configuration.ps1", "migrate.ps1"} {
+					data, err := embeddedResources.ReadFile("scripts/" + name)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if err := os.WriteFile(filepath.Join(scripts, name), data, 0600); err != nil {
+						t.Fatal(err)
+					}
+				}
+				// Exercise real migration and routing with noninteractive stand-ins
+				// for the settings dialog and registration. No real registry writes.
+				setup := `
+$ErrorActionPreference = 'Stop'
+if ($env:POKERLAUNCHER_TEST_RECOVERY -eq 'cancel') { exit 0 }
+. (Join-Path $PSScriptRoot 'Configuration.ps1')
+$config = Read-LauncherConfiguration (Join-Path $env:APPDATA 'PokerStarsLauncher\config.json')
+$destination = Join-Path $env:APPDATA 'PokerLauncher'
+New-Item -ItemType Directory -Path $destination -Force | Out-Null
+if ($env:POKERLAUNCHER_TEST_RECOVERY -eq 'manual') { $config.LoginMode = 'Manual' }
+else {
+    $password = ConvertTo-SecureString 'replacement-fixture-password' -AsPlainText -Force
+    try {
+        $path = Join-Path $destination 'password.dpapi'
+        [IO.File]::WriteAllText($path, (ConvertFrom-SecureString $password))
+        $verified = ConvertTo-SecureString ([IO.File]::ReadAllText($path))
+        try { if ($verified.Length -ne $password.Length) { throw 'Replacement password failed verification.' } }
+        finally { $verified.Dispose() }
+    } finally { $password.Dispose() }
+}
+Write-LauncherConfiguration $config (Join-Path $destination 'config.json')
+`
+				registration := `[IO.File]::WriteAllText((Join-Path $PSScriptRoot 'registered.txt'), 'registered')`
+				for name, data := range map[string]string{"setup.ps1": setup, "register.ps1": registration} {
+					if err := os.WriteFile(filepath.Join(scripts, name), []byte(data), 0600); err != nil {
+						t.Fatal(err)
+					}
+				}
+				recovery, err := prepareInstalledSettings(directory)
+				if err != nil || !recovery {
+					t.Fatalf("migration failure must request Settings: recovery=%v err=%v", recovery, err)
+				}
+				marker := filepath.Join(scripts, "registered.txt")
+				if _, err := os.Stat(marker); !os.IsNotExist(err) {
+					t.Fatal("failed migration must defer registration")
+				}
+				if configExists() {
+					t.Fatal("failed migration published a configuration")
+				}
+				if err := runSetupInDirectory(directory); err != nil {
+					t.Fatal(err)
+				}
+				got, err := os.ReadFile(legacyConfig)
+				if err != nil || !bytes.Equal(got, original) {
+					t.Fatal("recovery modified legacy configuration")
+				}
+				saved, err := os.ReadFile(legacyPassword)
+				if credential == "missing" {
+					if !os.IsNotExist(err) {
+						t.Fatal("recovery created a legacy credential")
+					}
+				} else if err != nil || string(saved) != "undecryptable" {
+					t.Fatal("recovery modified legacy credential")
+				}
+				if action == "cancel" {
+					if configExists() {
+						t.Fatal("cancelled recovery saved settings")
+					}
+					if _, err := os.Stat(marker); !os.IsNotExist(err) {
+						t.Fatal("cancelled recovery registered the new app")
+					}
+					return
+				}
+				if _, err := os.Stat(marker); err != nil {
+					t.Fatal("saved recovery did not refresh registration", err)
+				}
+				data, err := os.ReadFile(filepath.Join(os.Getenv("APPDATA"), "PokerLauncher", "config.json"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				var config struct {
+					LoginMode, PokerStarsUsername string
+					Helpers                       []json.RawMessage
+				}
+				if err := json.Unmarshal(data, &config); err != nil {
+					t.Fatal(err)
+				}
+				expected := "PokerStars"
+				if action == "manual" {
+					expected = "Manual"
+				}
+				if config.LoginMode != expected || config.PokerStarsUsername != "recover-me" || len(config.Helpers) != 2 {
+					t.Fatalf("recovery lost settings: %+v", config)
+				}
+				recovery, err = prepareInstalledSettings(directory)
+				if err != nil || recovery {
+					t.Fatalf("saved recovery must bypass legacy migration: %v %v", recovery, err)
+				}
+			})
+		}
 	}
 }

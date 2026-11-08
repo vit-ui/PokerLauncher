@@ -71,6 +71,8 @@ This is a **2.x.x breaking-change release**, with a renamed executable, installa
 
 Running the new download automatically transfers legacy PokerStarsLauncher settings, helper order, and encrypted credentials. Legacy users retain automatic login. Migration verifies credentials and stages configuration before publishing it; repeating migration does not overwrite an existing PokerLauncher configuration. An untouched legacy settings backup is retained under `%APPDATA%\PokerLauncher\legacy-backup`. Shortcuts and Windows Apps registration switch to PokerLauncher; the old installation is removed after the installer exits.
 
+If migration fails, Settings opens for recovery and the failure is recorded in the logs. Your legacy program list and username are loaded when readable; enter a replacement password or turn off automatic login. Saving creates new settings before refreshing shortcuts and registration. Cancelling leaves the legacy installation and data intact.
+
 For subsequent updates, run the latest download. Updates preserve settings and credentials and do not launch poker applications. Uninstall through Windows Settings → Apps → PokerLauncher. Choose whether to retain saved data, including the migration backup.
 
 ## Development
