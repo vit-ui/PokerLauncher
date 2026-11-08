@@ -261,7 +261,7 @@ public static class PSLRuntimeFixture {
         "-Name 'PokerStars' -ErrorAction SilentlyContinue | Where-Object { `$_.Path -and `$_.Path.StartsWith(`$env:PSL_TEST_CASE_ROOT, [StringComparison]::OrdinalIgnoreCase) })")
     $testController = $testController.Replace('[int]$HandoffTimeoutSeconds = 30', '[int]$HandoffTimeoutSeconds = 1')
     $testController = $testController.Replace('$startupTimeoutSeconds = 240', '$startupTimeoutSeconds = 15')
-    foreach ($scenario in @('success', 'already-running', 'companion-close', 'pokerstars-close', 'all-close', 'pokerstars-crash', 'start-failure', 'updater-failure', 'login-failure', 'hung-helper')) {
+    foreach ($scenario in @('success', 'already-running', 'reused-helper', 'manual-zero', 'manual-many', 'missing-helper', 'companion-close', 'pokerstars-close', 'all-close', 'pokerstars-crash', 'start-failure', 'updater-failure', 'login-failure', 'hung-helper')) {
         $caseRoot = Join-Path $testRoot ($scenario + '-' + [char]0x00E9)
         $scriptDir = Join-Path $caseRoot 'scripts'
         $appsDir = Join-Path $caseRoot 'apps'
@@ -320,10 +320,27 @@ exit 0
                 StarsCaption = Join-Path $appsDir 'StarsCaption.exe'
             }
         }
-        [IO.File]::WriteAllText((Join-Path $roaming 'config.json'), ($config | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
+        . (Join-Path $repoRoot 'scripts\Configuration.ps1')
+        $config = Convert-LauncherConfiguration ([pscustomobject]$config)
+        if ($scenario -like 'manual-*') {
+            $config.LoginMode = 'Manual'
+            if ($scenario -eq 'manual-zero') { $config.Helpers = @() }
+            else {
+                for ($i = 0; $i -lt 8; $i++) {
+                    $extra = Join-Path $appsDir ('CustomHelper' + $i + '.exe')
+                    Copy-Item -LiteralPath $testExe -Destination $extra
+                    $entry = New-ProgramEntry ('Custom helper ' + $i) $extra
+                    $entry.Arguments = 'sleep'; $entry.WorkingDirectory = $appsDir
+                    $config.Helpers += $entry
+                }
+            }
+        }
+        if ($scenario -eq 'missing-helper') { $config.Helpers[1].Path = Join-Path $appsDir 'missing.exe' }
+        [IO.File]::WriteAllText((Join-Path $roaming 'config.json'), ($config | ConvertTo-Json -Depth 8), [Text.UTF8Encoding]::new($false))
         $testPassword = ConvertTo-SecureString 'fixture-only-password' -AsPlainText -Force
         try { ConvertFrom-SecureString $testPassword | Set-Content -LiteralPath (Join-Path $roaming 'password.dpapi') }
         finally { $testPassword.Dispose() }
+        if ($scenario -like 'manual-*') { Remove-Item -LiteralPath (Join-Path $roaming 'password.dpapi') -Force }
         $wrapper = @'
 param([string]$CaseRoot, [string]$Scenario)
 $env:APPDATA = Join-Path $CaseRoot 'roaming'
@@ -340,14 +357,16 @@ exit $LASTEXITCODE
         if ($scenario -eq 'already-running') {
             $existingSession = Start-UnownedTestApplication (Join-Path $appsDir 'PokerStars.exe')
         }
+        if ($scenario -eq 'reused-helper') { $existingSession = Start-UnownedTestApplication (Join-Path $appsDir 'StarsCaption.exe') }
         $output = & $powerShell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $wrapperPath -CaseRoot $caseRoot -Scenario $scenario 2>&1
         $controllerExit = $LASTEXITCODE
-        $expectedExit = switch ($scenario) { { $_ -in @('success', 'already-running', 'companion-close', 'pokerstars-close', 'all-close') } { 0 }; { $_ -in @('start-failure', 'updater-failure') } { 3 }; default { 1 } }
+        $expectedExit = switch ($scenario) { { $_ -in @('success', 'already-running', 'reused-helper', 'manual-zero', 'manual-many', 'companion-close', 'pokerstars-close', 'all-close') } { 0 }; { $_ -in @('start-failure', 'updater-failure', 'missing-helper') } { 3 }; default { 1 } }
         Assert-True ($controllerExit -eq $expectedExit) "Controller scenario '$scenario' returned $controllerExit`: $output"
         $controllerLog = Get-Content -LiteralPath (Join-Path $caseRoot 'local\PokerLauncher\logs\launcher.log') -Raw
-        if ($scenario -eq 'already-running') {
-            Assert-True ($controllerLog -like '*Reusing application: PokerStars*') 'Already-running session was not recorded as an expected skipped launch.'
-            Assert-True ($controllerLog -notlike '*LAUNCHER FAILURE*' -and $controllerLog -notlike '*Started PokerStars login helper*' -and $controllerLog -notlike '*terminated*') 'Already-running session must skip login and failure cleanup.'
+        if ($scenario -in @('already-running', 'reused-helper')) {
+            $reusedName = if ($scenario -eq 'already-running') { 'PokerStars' } else { 'StarsCaption' }
+            Assert-True ($controllerLog -like ('*Reusing application: ' + $reusedName + '*')) 'Already-running session was not recorded as an expected skipped launch.'
+            Assert-True ($controllerLog -notlike '*LAUNCHER FAILURE*' -and ($scenario -eq 'reused-helper' -or $controllerLog -notlike '*Started PokerStars login helper*') -and $controllerLog -notlike '*terminated*') 'Already-running session must skip login and failure cleanup.'
             $existingSession.Refresh()
             Assert-True (-not $existingSession.HasExited) 'The existing PokerStars session was interrupted.'
             $existingSession.Kill()
@@ -358,7 +377,7 @@ exit $LASTEXITCODE
             Assert-True ($controllerLog -like '*Launch cancelled: PokerStars closed normally*') 'Normal PokerStars close must cancel pending login automation.'
             Assert-True ($controllerLog -notlike '*LAUNCHER FAILURE*' -and $controllerLog -notlike '*terminated the entire*') 'Normal closure must not trigger a failure or terminate other applications.'
         }
-        elseif ($scenario -in @('success', 'companion-close', 'start-failure', 'updater-failure')) {
+        elseif ($scenario -in @('success', 'manual-zero', 'manual-many', 'missing-helper', 'companion-close', 'start-failure', 'updater-failure')) {
             Assert-True ($controllerLog -like '*Launcher completed successfully*') "Controller did not confirm successful startup. Output: $output Log: $controllerLog"
         }
         else {
@@ -372,19 +391,20 @@ exit $LASTEXITCODE
             Assert-True ($controllerLog -like $expectedError) "Wrong controller failure for '$scenario': $controllerLog"
             Assert-True ($controllerLog -like '*Windows terminated the entire launcher process job*') 'Controller did not run failure cleanup.'
         }
+        if ($scenario -like 'manual-*') { Assert-True ($controllerLog -notlike '*Started PokerStars login helper*') 'Manual mode started login automation.' }
         $runningFixtureCount = 0
-        foreach ($fixture in @(Get-Process -Name PokerStars, xeester, StarsCaption -ErrorAction SilentlyContinue)) {
+        foreach ($fixture in @(Get-Process)) {
             try {
                 if (-not (Test-FixtureProcessPath $fixture $appsDir)) { continue }
-                if ($scenario -notin @('success', 'already-running', 'start-failure', 'updater-failure', 'companion-close', 'pokerstars-close')) { throw "Fixture PID $($fixture.Id) survived failed controller cleanup." }
+                if ($scenario -notin @('success', 'already-running', 'reused-helper', 'manual-zero', 'manual-many', 'start-failure', 'updater-failure', 'missing-helper', 'companion-close', 'pokerstars-close')) { throw "Fixture PID $($fixture.Id) survived failed controller cleanup." }
                 $runningFixtureCount++
                 $fixture.Kill()
                 $fixture.WaitForExit()
             }
             finally { $fixture.Dispose() }
         }
-        if ($scenario -in @('success', 'already-running', 'start-failure', 'updater-failure', 'companion-close', 'pokerstars-close', 'all-close')) {
-            $expectedRunning = switch ($scenario) { 'success' { 3 }; 'already-running' { 2 }; 'start-failure' { 2 }; 'updater-failure' { 2 }; 'companion-close' { 1 }; 'pokerstars-close' { 2 }; 'all-close' { 0 } }
+        if ($scenario -in @('success', 'already-running', 'reused-helper', 'manual-zero', 'manual-many', 'start-failure', 'updater-failure', 'missing-helper', 'companion-close', 'pokerstars-close', 'all-close')) {
+            $expectedRunning = switch ($scenario) { 'success' { 3 }; 'reused-helper' { 2 }; 'manual-zero' { 1 }; 'manual-many' { 11 }; 'missing-helper' { 2 }; 'already-running' { 2 }; 'start-failure' { 2 }; 'updater-failure' { 2 }; 'companion-close' { 1 }; 'pokerstars-close' { 2 }; 'all-close' { 0 } }
             Assert-True ($runningFixtureCount -eq $expectedRunning) "Scenario '$scenario' left $runningFixtureCount apps running, expected $expectedRunning."
         }
     }
@@ -430,7 +450,7 @@ finally {
         if (-not $outsideProcess.HasExited) { $outsideProcess.Kill(); $outsideProcess.WaitForExit() }
         $outsideProcess.Dispose()
     }
-    foreach ($fixture in @(Get-Process -Name PokerStarsUpdate, PokerStars, xeester-update, xeester, StarsCaption -ErrorAction SilentlyContinue)) {
+    foreach ($fixture in @(Get-Process)) {
         try {
             if (Test-FixtureProcessPath $fixture $testRoot) {
                 $fixture.Kill()

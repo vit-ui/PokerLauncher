@@ -2,19 +2,19 @@ param(
     [Parameter(Mandatory = $true, ParameterSetName = 'Local')][string]$Path,
     [Parameter(Mandatory = $true, ParameterSetName = 'Published')][uri]$DownloadUrl,
     [Parameter(Mandatory = $true)][ValidatePattern('^[a-fA-F0-9]{64}$')][string]$ExpectedSha256,
-    [uri]$SourceUrl = 'https://github.com/vit-ui/PokerStarsLauncher/releases/latest/download/PokerStarsLauncher.exe'
+    [uri]$SourceUrl = 'https://github.com/vit-ui/PokerStarsLauncher/releases/latest/download/PokerLauncher.exe'
 )
 
 $ErrorActionPreference = 'Stop'
 # Save invokes Windows Attachment Services, used by Chromium downloads for
 # antivirus checks and Internet-origin evidence. It never executes the file.
 # https://learn.microsoft.com/windows/win32/api/shobjidl_core/nf-shobjidl_core-iattachmentexecute-save
-if (-not ('PokerStarsLauncherDownloadCheck' -as [type])) {
+if (-not ('PokerLauncherDownloadCheck' -as [type])) {
     Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
 
-public static class PokerStarsLauncherDownloadCheck {
+public static class PokerLauncherDownloadCheck {
     [ComImport, Guid("73DB1241-1E85-4581-8E4F-A81E1D0F8C57")]
     [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
     private interface IAttachmentExecute {
@@ -47,9 +47,9 @@ public static class PokerStarsLauncherDownloadCheck {
 '@
 }
 
-$testDirectory = Join-Path ([IO.Path]::GetTempPath()) ('PokerStarsLauncher-download-check-' + [Guid]::NewGuid().ToString('N'))
+$testDirectory = Join-Path ([IO.Path]::GetTempPath()) ('PokerLauncher-download-check-' + [Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $testDirectory | Out-Null
-$download = Join-Path $testDirectory 'PokerStarsLauncher.exe'
+$download = Join-Path $testDirectory 'PokerLauncher.exe'
 try {
     if ($PSCmdlet.ParameterSetName -eq 'Published') {
         if ($DownloadUrl.Scheme -ne 'https') { throw 'Published download verification requires HTTPS.' }
@@ -65,7 +65,7 @@ try {
         throw 'The downloaded executable does not match the expected release checksum.'
     }
 
-    $result = [PokerStarsLauncherDownloadCheck]::Check($download, $SourceUrl.AbsoluteUri)
+    $result = [PokerLauncherDownloadCheck]::Check($download, $SourceUrl.AbsoluteUri)
     Write-Host ('Windows Attachment Services Save HRESULT: 0x{0:X8}' -f $result)
     if ($result -ne 0) { throw 'Windows Attachment Services rejected or could not validate the download.' }
     if (-not (Test-Path -LiteralPath $download -PathType Leaf) -or

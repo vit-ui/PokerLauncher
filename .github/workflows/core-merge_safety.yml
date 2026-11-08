@@ -55,8 +55,8 @@ jobs:
         run: go vet ./...
       - name: Cross-build Windows GUI executable
         shell: powershell
-        run: go build -trimpath -ldflags '-s -w -H=windowsgui -X main.version=ci' -o "$env:RUNNER_TEMP\PokerStarsLauncher.exe" .
+        run: go build -trimpath -ldflags '-s -w -H=windowsgui -X main.version=ci' -o "$env:RUNNER_TEMP\PokerLauncher.exe" .
       - name: Scan built executable with Microsoft Defender
         shell: powershell
         timeout-minutes: 5
-        run: ./tests/Scan-Release.ps1 -Path "$env:RUNNER_TEMP\PokerStarsLauncher.exe"
+        run: ./tests/Scan-Release.ps1 -Path "$env:RUNNER_TEMP\PokerLauncher.exe"

@@ -208,3 +208,7 @@ foreach ($requiredPattern in @(
 Write-Host ("Validated Windows PowerShell 5.1 syntax, cmdlet parameter sets, {0} embedded C# declarations, a live Windows Job Object child process, uninstall behavior, and required project files across {1} scripts." -f $csharpTypesCompiled, $scriptFiles.Count)
 
 & (Join-Path $PSScriptRoot 'Test-LauncherRuntime.ps1')
+
+& (Join-Path $PSScriptRoot 'Test-Configuration.ps1')
+& (Join-Path $PSScriptRoot 'Test-Migration.ps1')
+& (Join-Path $PSScriptRoot 'Test-Settings.ps1')
