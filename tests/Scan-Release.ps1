@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory = $true)][string]$Path,
-    [uri]$SourceUrl = 'https://github.com/vit-ui/PokerStarsLauncher/releases/latest/download/PokerLauncher.exe'
+    [uri]$SourceUrl = 'https://github.com/vit-ui/PokerLauncher/releases/latest/download/PokerLauncher.exe'
 )
 
 $ErrorActionPreference = 'Stop'

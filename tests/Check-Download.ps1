@@ -2,7 +2,7 @@ param(
     [Parameter(Mandatory = $true, ParameterSetName = 'Local')][string]$Path,
     [Parameter(Mandatory = $true, ParameterSetName = 'Published')][uri]$DownloadUrl,
     [Parameter(Mandatory = $true)][ValidatePattern('^[a-fA-F0-9]{64}$')][string]$ExpectedSha256,
-    [uri]$SourceUrl = 'https://github.com/vit-ui/PokerStarsLauncher/releases/latest/download/PokerLauncher.exe'
+    [uri]$SourceUrl = 'https://github.com/vit-ui/PokerLauncher/releases/latest/download/PokerLauncher.exe'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -38,7 +38,7 @@ public static class PokerLauncherDownloadCheck {
             attachment.SetClientGuid(ref client);
             attachment.SetLocalPath(path);
             attachment.SetSource(source);
-            attachment.SetReferrer("https://github.com/vit-ui/PokerStarsLauncher/releases");
+            attachment.SetReferrer("https://github.com/vit-ui/PokerLauncher/releases");
             return attachment.Save();
         }
         finally { Marshal.FinalReleaseComObject(instance); }

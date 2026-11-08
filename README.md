@@ -67,7 +67,7 @@ Logs are under `%LOCALAPPDATA%\PokerLauncher\logs`. Error dialogs give a next st
 
 ## Upgrading and uninstalling
 
-This is a **2.x.x breaking-change release**, with a renamed executable, installation identity, folders, and configuration schema. The GitHub repository and release history stay in place.
+This is a **2.x.x breaking-change release**, with a renamed executable, installation identity, folders, and configuration schema. The GitHub repository is now [vit-ui/PokerLauncher](https://github.com/vit-ui/PokerLauncher); release history is preserved and GitHub redirects old repository links.
 
 Running the new download automatically transfers legacy PokerStarsLauncher settings, helper order, and encrypted credentials. Legacy users retain automatic login. Migration verifies credentials and stages configuration before publishing it; repeating migration does not overwrite an existing PokerLauncher configuration. An untouched legacy settings backup is retained under `%APPDATA%\PokerLauncher\legacy-backup`. Shortcuts and Windows Apps registration switch to PokerLauncher; the old installation is removed after the installer exits.
 
@@ -89,7 +89,7 @@ On Windows PowerShell 5.1, run:
 ./tests/Validate-Project.ps1
 ```
 
-Validation includes syntax/cmdlet checks, embedded C# compilation, native process jobs, synthetic startup/failure scenarios, configuration, migration, settings controls, and uninstall tests. Tests use isolated profiles and synthetic executables; they do not launch real poker applications or read saved user credentials. The settings test briefly opens and closes a test window. Real UAC and PokerStars login need manual verification outside a live poker session.
+Validation includes syntax/cmdlet checks, embedded C# compilation, native process jobs, synthetic startup/failure scenarios, configuration, migration, settings controls, and uninstall tests. Tests use isolated profiles and synthetic executables; they do not launch real poker applications or read saved user credentials. The settings test briefly opens and closes a test window. Real UAC and native PokerStars login were verified previously; their underlying mechanisms are unchanged. Optional login and reused-session behavior are covered by the synthetic runtime tests. Repeat real verification if those mechanisms change.
 
 The icon is `assets/PokerLauncher.ico`; after changing artwork run `go generate .` and commit the updated native resource. See [assets/README.md](assets/README.md).
 

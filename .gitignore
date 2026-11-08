@@ -15,6 +15,7 @@ login-error.txt
 
 # Build output
 PokerStarsLauncher.exe
+PokerLauncher.exe
 /dist/
 /out/
 
