@@ -417,6 +417,9 @@ func runPowerShellInDirectory(directory, scriptName string) error {
 func powerShellResultError(scriptName string, output []byte, err error) error {
 	if err != nil {
 		var exitError *exec.ExitError
+		if scriptName == "launch.ps1" && errors.As(err, &exitError) && exitError.ExitCode() == 3 {
+			return fmt.Errorf("helper startup failures: %s", strings.TrimSpace(string(output)))
+		}
 		if scriptName == "launch.ps1" && errors.As(err, &exitError) && exitError.ExitCode() == launcherAlreadyRunningExitCode {
 			return errPokerStarsAlreadyRunning
 		}
@@ -440,6 +443,13 @@ func runLauncherController() {
 }
 
 func launchErrorDialog(err error) (string, string, uintptr) {
+	if err != nil && strings.HasPrefix(err.Error(), "helper startup failures:") {
+		detail := err.Error()
+		if index := strings.Index(detail, "Some helpers could not start:"); index >= 0 {
+			detail = detail[index:]
+		}
+		return "Some helpers could not start", detail, mbOK | mbIconInformation
+	}
 	if errors.Is(err, errPokerStarsAlreadyRunning) {
 		return "PokerStars is already running",
 			"Close PokerStars when you're ready, then open PokerStars Launcher again.\r\n\r\nYour current session has been left running.",

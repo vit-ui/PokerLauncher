@@ -110,12 +110,14 @@ try {
 
     # One executable can act as an updater, a delayed intermediate parent, or
     # a persistent app. Each descendant inherits the production Windows job.
-    $testExe = Join-Path $testRoot 'PSLRuntimeUpdater.exe'
+    $testExe = Join-Path $testRoot 'PokerStars.exe'
     Add-Type -OutputAssembly $testExe -OutputType WindowsApplication -TypeDefinition @'
 using System;
 using System.Diagnostics;
 using System.IO;
 using System.Threading;
+[assembly: System.Reflection.AssemblyProduct("PokerStars Test Fixture")]
+[assembly: System.Reflection.AssemblyCompany("PokerStars Test Fixture")]
 public static class PSLRuntimeFixture {
     public static int Main(string[] args) {
         string path = System.Reflection.Assembly.GetExecutingAssembly().Location;
@@ -272,6 +274,7 @@ public static class PSLRuntimeFixture {
             [IO.File]::WriteAllText((Join-Path $appsDir 'StarsCaption.exe'), 'This is not a Windows executable.')
         }
         Copy-Item -LiteralPath (Join-Path $repoRoot 'scripts\ProcessJob.ps1') -Destination $scriptDir
+        Copy-Item -LiteralPath (Join-Path $repoRoot 'scripts\Configuration.ps1') -Destination $scriptDir
         [IO.File]::WriteAllText((Join-Path $scriptDir 'launch.ps1'), $testController)
         $stub = @'
 param([string]$RunStartedUtc, [string]$JobName, [string]$PokerStarsPath)
@@ -339,12 +342,12 @@ exit $LASTEXITCODE
         }
         $output = & $powerShell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $wrapperPath -CaseRoot $caseRoot -Scenario $scenario 2>&1
         $controllerExit = $LASTEXITCODE
-        $expectedExit = switch ($scenario) { { $_ -in @('success', 'companion-close', 'pokerstars-close', 'all-close') } { 0 }; 'already-running' { 2 }; default { 1 } }
+        $expectedExit = switch ($scenario) { { $_ -in @('success', 'already-running', 'companion-close', 'pokerstars-close', 'all-close') } { 0 }; { $_ -in @('start-failure', 'updater-failure') } { 3 }; default { 1 } }
         Assert-True ($controllerExit -eq $expectedExit) "Controller scenario '$scenario' returned $controllerExit`: $output"
         $controllerLog = Get-Content -LiteralPath (Join-Path $caseRoot 'local\PokerStarsLauncher\logs\launcher.log') -Raw
         if ($scenario -eq 'already-running') {
-            Assert-True ($controllerLog -like '*Launch skipped: PokerStars is already running*') 'Already-running session was not recorded as an expected skipped launch.'
-            Assert-True ($controllerLog -notlike '*LAUNCHER FAILURE*' -and $controllerLog -notlike '*Started *' -and $controllerLog -notlike '*terminated*') 'Already-running session must not trigger startup or failure cleanup.'
+            Assert-True ($controllerLog -like '*Reusing application: PokerStars*') 'Already-running session was not recorded as an expected skipped launch.'
+            Assert-True ($controllerLog -notlike '*LAUNCHER FAILURE*' -and $controllerLog -notlike '*Started PokerStars login helper*' -and $controllerLog -notlike '*terminated*') 'Already-running session must skip login and failure cleanup.'
             $existingSession.Refresh()
             Assert-True (-not $existingSession.HasExited) 'The existing PokerStars session was interrupted.'
             $existingSession.Kill()
@@ -355,7 +358,7 @@ exit $LASTEXITCODE
             Assert-True ($controllerLog -like '*Launch cancelled: PokerStars closed normally*') 'Normal PokerStars close must cancel pending login automation.'
             Assert-True ($controllerLog -notlike '*LAUNCHER FAILURE*' -and $controllerLog -notlike '*terminated the entire*') 'Normal closure must not trigger a failure or terminate other applications.'
         }
-        elseif ($scenario -in @('success', 'companion-close')) {
+        elseif ($scenario -in @('success', 'companion-close', 'start-failure', 'updater-failure')) {
             Assert-True ($controllerLog -like '*Launcher completed successfully*') "Controller did not confirm successful startup. Output: $output Log: $controllerLog"
         }
         else {
@@ -373,15 +376,15 @@ exit $LASTEXITCODE
         foreach ($fixture in @(Get-Process -Name PokerStars, xeester, StarsCaption -ErrorAction SilentlyContinue)) {
             try {
                 if (-not (Test-FixtureProcessPath $fixture $appsDir)) { continue }
-                if ($scenario -notin @('success', 'companion-close', 'pokerstars-close')) { throw "Fixture PID $($fixture.Id) survived failed controller cleanup." }
+                if ($scenario -notin @('success', 'already-running', 'start-failure', 'updater-failure', 'companion-close', 'pokerstars-close')) { throw "Fixture PID $($fixture.Id) survived failed controller cleanup." }
                 $runningFixtureCount++
                 $fixture.Kill()
                 $fixture.WaitForExit()
             }
             finally { $fixture.Dispose() }
         }
-        if ($scenario -in @('success', 'companion-close', 'pokerstars-close', 'all-close')) {
-            $expectedRunning = switch ($scenario) { 'success' { 3 }; 'companion-close' { 1 }; 'pokerstars-close' { 2 }; 'all-close' { 0 } }
+        if ($scenario -in @('success', 'already-running', 'start-failure', 'updater-failure', 'companion-close', 'pokerstars-close', 'all-close')) {
+            $expectedRunning = switch ($scenario) { 'success' { 3 }; 'already-running' { 2 }; 'start-failure' { 2 }; 'updater-failure' { 2 }; 'companion-close' { 1 }; 'pokerstars-close' { 2 }; 'all-close' { 0 } }
             Assert-True ($runningFixtureCount -eq $expectedRunning) "Scenario '$scenario' left $runningFixtureCount apps running, expected $expectedRunning."
         }
     }

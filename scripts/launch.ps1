@@ -18,6 +18,10 @@ function Write-LauncherLog {
 function Test-LauncherApplication {
     param($Root, [IntPtr]$Job, [double]$ElapsedSeconds, [int]$HandoffTimeoutSeconds = 30)
 
+    if ($Root.Reused) {
+        if (-not (Test-ApplicationRunning $Root.ApplicationPath)) { $Root.ClosedNormally = $true }
+        return $true
+    }
     [uint32]$rootExitCode = 0
     $rootError = $null
     $rootExited = [PokerStarsLauncherProcessJob]::HasExited(
@@ -85,6 +89,18 @@ function Test-LauncherApplication {
     return $false
 }
 
+function Test-ApplicationRunning {
+    param([string]$Path)
+    foreach ($candidate in @(Get-Process -Name ([IO.Path]::GetFileNameWithoutExtension($Path)) -ErrorAction SilentlyContinue)) {
+        try {
+            if (-not [string]::IsNullOrWhiteSpace($candidate.MainModule.FileName) -and [IO.Path]::GetFullPath($candidate.MainModule.FileName) -ieq $Path -and -not $candidate.HasExited) { return $true }
+        } catch [ComponentModel.Win32Exception] { throw "Cannot inspect existing application '$Path'." }
+        catch [InvalidOperationException] { continue }
+        finally { $candidate.Dispose() }
+    }
+    return $false
+}
+
 function Test-IsAdministrator {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
     $principal = New-Object Security.Principal.WindowsPrincipal($identity)
@@ -124,44 +140,20 @@ try {
         throw "Windows PowerShell executable was not found: $windowsPowerShell"
     }
 
-    $config = Get-Content -LiteralPath $configPath -Raw -Encoding UTF8 | ConvertFrom-Json
-    if ([int]$config.SchemaVersion -ne 1) {
-        throw 'Unsupported configuration schema. Run Configure PokerStarsLauncher from the Start Menu again.'
-    }
-    if ([string]::IsNullOrWhiteSpace([string]$config.PokerStarsUsername)) {
-        throw 'PokerStars username is missing. Run Configure PokerStarsLauncher from the Start Menu again.'
-    }
-    $savedPassword = $null
-    try {
-        $passwordPath = Join-Path $appDataRoot 'password.dpapi'
-        $savedPassword = ConvertTo-SecureString -String ([IO.File]::ReadAllText($passwordPath).Trim())
-        if ($savedPassword.Length -eq 0) { throw 'The saved password is empty.' }
-    }
-    catch { throw 'The saved password is missing or cannot be decrypted under this Windows account. Run Configure PokerStarsLauncher from the Start Menu again.' }
-    finally { if ($null -ne $savedPassword) { $savedPassword.Dispose() } }
-
-    $launchItems = @(
-        [PSCustomObject]@{ Name = 'PokerStars updater'; Path = [string]$config.Applications.PokerStarsUpdater; Application = 'PokerStars.exe'; IsUpdater = $true },
-        [PSCustomObject]@{ Name = 'Xeester updater'; Path = [string]$config.Applications.XeesterUpdater; Application = 'jre\bin\xeester.exe'; IsUpdater = $true },
-        [PSCustomObject]@{ Name = 'StarsCaption'; Path = [string]$config.Applications.StarsCaption; Application = ''; IsUpdater = $false }
-    )
-
-    foreach ($item in $launchItems) {
-        if ([string]::IsNullOrWhiteSpace($item.Path) -or -not (Test-Path -LiteralPath $item.Path -PathType Leaf)) {
-            throw "Configured executable for $($item.Name) was not found: $($item.Path). Run Configure PokerStarsLauncher from the Start Menu to correct it."
-        }
-        $item.Path = [IO.Path]::GetFullPath($item.Path)
-    }
-
-    # The login helper intentionally targets only a PokerStars process created
-    # during this launcher invocation. Refuse to start if an older PokerStars
-    # process is still present, instead of waiting 180 seconds for a dialog in
-    # a process the launcher does not own.
-    $existingPokerStars = @(Get-Process -Name 'PokerStars' -ErrorAction SilentlyContinue)
-    if ($existingPokerStars.Count -gt 0) {
-        Write-LauncherLog 'Launch skipped: PokerStars is already running. Existing applications were left running.'
-        Write-Host 'PokerStars is already running. Close PokerStars when you are ready, then open PokerStars Launcher again.'
-        exit 2 # Expected condition; the Go host shows an informational dialog.
+    . (Join-Path $PSScriptRoot 'Configuration.ps1')
+    $config = Read-LauncherConfiguration $configPath
+    Assert-LauncherConfiguration $config
+    $launchItems = @($config.PokerClient) + @($config.Helpers)
+    $helperFailures = [Collections.Generic.List[string]]::new()
+    $clientReused = Test-ApplicationRunning (Resolve-ProgramEntry $config.PokerClient).ApplicationPath
+    $automaticLogin = $config.LoginMode -eq 'PokerStars' -and -not $clientReused
+    if ($automaticLogin) {
+        $savedPassword = $null
+        try {
+            $savedPassword = ConvertTo-SecureString -String ([IO.File]::ReadAllText((Join-Path $appDataRoot 'password.dpapi')).Trim())
+            if ($savedPassword.Length -eq 0) { throw 'Empty password' }
+        } catch { throw 'The saved password is missing or cannot be decrypted under this Windows account.' }
+        finally { if ($null -ne $savedPassword) { $savedPassword.Dispose() } }
     }
 
     $nativeError = $null
@@ -172,33 +164,35 @@ try {
 
     Write-LauncherLog 'Failure cleanup uses a Windows Job Object. Each process is assigned while suspended before it can spawn descendants.'
 
-    # Preserve the original BAT behavior: launch these three in order, with no
-    # waiting for one updater to finish before starting the next application.
-    foreach ($item in $launchItems) {
-        $processId = 0
-        $processHandleId = 0
-        $applicationWorkingDirectory = [System.IO.Path]::GetDirectoryName($item.Path)
-        $started = [PokerStarsLauncherProcessJob]::StartProcess(
-            $jobHandle, $item.Path, '', $applicationWorkingDirectory, $false,
-            [ref]$processId, [ref]$processHandleId, [ref]$nativeError
-        )
-        if (-not $started) {
-            throw "Could not start $($item.Name): $nativeError"
+    for ($index = 0; $index -lt $launchItems.Count; $index++) {
+        $isClient = $index -eq 0
+        $item = Resolve-ProgramEntry $launchItems[$index]
+        try {
+            $reused = Test-ApplicationRunning $item.ApplicationPath
+            $processId = 0; $processHandleId = 0
+            if (-not $reused) {
+                Assert-ProgramFiles $item
+                $started = [PokerStarsLauncherProcessJob]::StartProcess(
+                    $jobHandle, $item.Path, $item.Arguments, $item.WorkingDirectory, $false,
+                    [ref]$processId, [ref]$processHandleId, [ref]$nativeError
+                )
+                if (-not $started) { throw "Could not start $($item.Name): $nativeError" }
+                Write-LauncherLog "Started $($item.Name): $($item.Path) (PID $processId)."
+            } else { Write-LauncherLog "Reusing application: $($item.Name) ($($item.ApplicationPath))." }
+            $rootProcesses += [PSCustomObject]@{
+                Name = $item.Name; ProcessId = [int]$processId; ProcessHandleId = [int]$processHandleId
+                ApplicationPath = $item.ApplicationPath; IsUpdater = $item.Path -ine $item.ApplicationPath
+                ExitObservedAt = -1.0; HandoffLogged = $false; ApplicationProcess = $null
+                ClosedNormally = $false; Reused = $reused; IsClient = $isClient; Failed = $false
+            }
+        } catch {
+            if ($isClient) { throw }
+            $helperFailures.Add("$($item.Name): $($_.Exception.Message)")
+            Write-LauncherLog "Helper failure: $($helperFailures[$helperFailures.Count - 1])"
         }
-        $rootProcesses += [PSCustomObject]@{
-            Name = $item.Name
-            ProcessId = [int]$processId
-            ProcessHandleId = [int]$processHandleId
-            ApplicationPath = $(if ($item.IsUpdater) { Join-Path $applicationWorkingDirectory $item.Application } else { $item.Path })
-            IsUpdater = $item.IsUpdater
-            ExitObservedAt = -1.0
-            HandoffLogged = $false
-            ApplicationProcess = $null
-            ClosedNormally = $false
-        }
-        Write-LauncherLog "Started $($item.Name): $($item.Path) (PID $processId)."
     }
 
+    if ($automaticLogin) {
     $loginArguments = '-NoLogo -NoProfile -STA -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $loginScript + '" -RunStartedUtc "' + $runStartedUtcText + '" -JobName "' + $jobName + '" -PokerStarsPath "' + $rootProcesses[0].ApplicationPath + '"'
     $loginProcessId = 0
     $loginProcessHandleId = 0
@@ -211,17 +205,37 @@ try {
     }
     Write-LauncherLog "Started PokerStars login helper (PID $loginProcessId)."
 
+    }
     $pokerStarsClosedAt = -1.0
     $loginFailureAt = -1.0
     $cancelled = $false
     while ($true) {
         if ($startupTimer.Elapsed.TotalSeconds -ge $startupTimeoutSeconds) {
-            throw "Application startup and PokerStars login did not complete within $startupTimeoutSeconds seconds. See launcher.log and login.log for the last observed state."
+            $client = $rootProcesses[0]
+            if (-not (Test-LauncherApplication $client $jobHandle $startupTimer.Elapsed.TotalSeconds) -or ($automaticLogin -and -not $loginExited)) {
+                throw "Application startup and PokerStars login did not complete within $startupTimeoutSeconds seconds."
+            }
+            foreach ($root in $rootProcesses) {
+                if ($root.IsClient -or $root.Failed) { continue }
+                try { $ready = Test-LauncherApplication $root $jobHandle $startupTimer.Elapsed.TotalSeconds }
+                catch { $ready = $false }
+                if (-not $ready) {
+                    $root.Failed = $true
+                    $helperFailures.Add("$($root.Name): startup timed out.")
+                }
+            }
+            break
         }
         $allApplicationsStarted = $true
         foreach ($root in $rootProcesses) {
-            if (-not (Test-LauncherApplication -Root $root -Job $jobHandle -ElapsedSeconds $startupTimer.Elapsed.TotalSeconds)) {
-                $allApplicationsStarted = $false
+            if ($root.Failed) { continue }
+            try {
+                if (-not (Test-LauncherApplication -Root $root -Job $jobHandle -ElapsedSeconds $startupTimer.Elapsed.TotalSeconds)) { $allApplicationsStarted = $false }
+            } catch {
+                if ($root.IsClient) { throw }
+                $root.Failed = $true
+                $helperFailures.Add("$($root.Name): $($_.Exception.Message)")
+                Write-LauncherLog "Helper failure: $($helperFailures[$helperFailures.Count - 1])"
             }
         }
 
@@ -230,7 +244,7 @@ try {
             # Allow a short handoff to a replacement PokerStars process.
             if (($startupTimer.Elapsed.TotalSeconds - $pokerStarsClosedAt) -ge 1) {
                 $stopError = $null
-                if (-not [PokerStarsLauncherProcessJob]::StopProcess($loginProcessHandleId, [ref]$stopError)) { throw $stopError }
+                if ($automaticLogin -and -not [PokerStarsLauncherProcessJob]::StopProcess($loginProcessHandleId, [ref]$stopError)) { throw $stopError }
                 Write-LauncherLog 'Launch cancelled: PokerStars closed normally during startup. Login automation stopped; other applications were left alone.'
                 Remove-Item -LiteralPath (Join-Path $logDirectory 'login-error.txt') -Force -ErrorAction SilentlyContinue
                 $cancelled = $true
@@ -239,6 +253,11 @@ try {
         }
         else { $pokerStarsClosedAt = -1.0 }
 
+        if (-not $automaticLogin) {
+            if ($allApplicationsStarted) { break }
+            Start-Sleep -Milliseconds 300
+            continue
+        }
         [uint32]$loginExitCode = 0
         $loginError = $null
         $loginExited = [PokerStarsLauncherProcessJob]::HasExited(
@@ -259,11 +278,16 @@ try {
 
     if (-not $cancelled) {
         Write-LauncherLog 'Launcher completed successfully. Application startup and login submission were confirmed.'
-        Write-Host 'PokerStars login was submitted successfully.' -ForegroundColor Green
+        Write-Host 'Application startup completed.' -ForegroundColor Green
     }
     [PokerStarsLauncherProcessJob]::CloseProcessHandles()
     [PokerStarsLauncherProcessJob]::CloseJob($jobHandle)
     $jobHandle = [IntPtr]::Zero
+    if ($helperFailures.Count -gt 0) {
+        Write-LauncherLog ("Helper failures: " + ($helperFailures -join '; '))
+        Write-Host ("Some helpers could not start:`r`n" + ($helperFailures -join "`r`n"))
+        exit 3 # Partial success: host reports helpers without fatal cleanup.
+    }
     exit 0
 }
 catch {
