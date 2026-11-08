@@ -2,15 +2,15 @@ $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Windows.Forms
 
 $appDirectory = (Resolve-Path (Join-Path $PSScriptRoot '..')).ProviderPath
-$appDataRoot = Join-Path $env:APPDATA 'PokerStarsLauncher'
-$localDataRoot = Join-Path $env:LOCALAPPDATA 'PokerStarsLauncher'
-$desktopShortcut = Join-Path ([Environment]::GetFolderPath('DesktopDirectory')) 'PokerStars Launcher.lnk'
-$startMenuFolder = Join-Path ([Environment]::GetFolderPath('Programs')) 'PokerStarsLauncher'
-$uninstallKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\PokerStarsLauncher'
+$appDataRoot = Join-Path $env:APPDATA 'PokerLauncher'
+$localDataRoot = Join-Path $env:LOCALAPPDATA 'PokerLauncher'
+$desktopShortcut = Join-Path ([Environment]::GetFolderPath('DesktopDirectory')) 'PokerLauncher.lnk'
+$startMenuFolder = Join-Path ([Environment]::GetFolderPath('Programs')) 'PokerLauncher'
+$uninstallKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\PokerLauncher'
 
 $choice = [System.Windows.Forms.MessageBox]::Show(
-    "Remove PokerStarsLauncher from this Windows account?`r`n`r`nChoose Yes to also remove the saved username, executable paths, and encrypted password. Choose No to keep those settings in case you reinstall later.",
-    'Uninstall PokerStarsLauncher',
+    "Remove PokerLauncher from this Windows account?`r`n`r`nChoose Yes to also remove the saved username, executable paths, and encrypted password. Choose No to keep those settings in case you reinstall later.",
+    'Uninstall PokerLauncher',
     [System.Windows.Forms.MessageBoxButtons]::YesNoCancel,
     [System.Windows.Forms.MessageBoxIcon]::Question
 )
@@ -21,7 +21,7 @@ Remove-Item -LiteralPath $desktopShortcut -Force -ErrorAction SilentlyContinue
 Remove-Item -LiteralPath $startMenuFolder -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item -LiteralPath $uninstallKey -Recurse -Force -ErrorAction SilentlyContinue
 
-$cleanupPath = Join-Path $env:TEMP ('PokerStarsLauncher-cleanup-' + [guid]::NewGuid().ToString('N') + '.ps1')
+$cleanupPath = Join-Path $env:TEMP ('PokerLauncher-cleanup-' + [guid]::NewGuid().ToString('N') + '.ps1')
 $cleanupScript = @'
 param(
     [int]$ParentProcessId,
@@ -62,8 +62,8 @@ $arguments = @(
 Start-Process -FilePath $powerShell -ArgumentList $arguments -WindowStyle Hidden
 
 [System.Windows.Forms.MessageBox]::Show(
-    'PokerStarsLauncher has been unregistered. Its application files will be removed after this window closes.',
-    'Uninstall PokerStarsLauncher',
+    'PokerLauncher has been unregistered. Its application files will be removed after this window closes.',
+    'Uninstall PokerLauncher',
     [System.Windows.Forms.MessageBoxButtons]::OK,
     [System.Windows.Forms.MessageBoxIcon]::Information
 ) | Out-Null

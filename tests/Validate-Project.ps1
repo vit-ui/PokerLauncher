@@ -150,7 +150,7 @@ if ($unexpectedUserLaunchers.Count -gt 0) {
 # launch.ps1. This catches P/Invoke/signature and process-assignment failures
 # that parsing and Add-Type compilation cannot detect.
 $jobError = $null
-$job = [PokerStarsLauncherProcessJob]::Create($null, [ref]$jobError)
+$job = [PokerLauncherProcessJob]::Create($null, [ref]$jobError)
 if ($job -eq [IntPtr]::Zero) {
     throw "Windows Job Object runtime test could not create a job: $jobError"
 }
@@ -159,7 +159,7 @@ try {
     $childProcessId = 0
     $handleId = 0
     $startError = $null
-    $started = [PokerStarsLauncherProcessJob]::StartProcess(
+    $started = [PokerLauncherProcessJob]::StartProcess(
         $job, $cmd, '/c exit 0', $env:TEMP, $false,
         [ref]$childProcessId, [ref]$handleId, [ref]$startError
     )
@@ -172,7 +172,7 @@ try {
     [uint32]$exitCode = 0
     while ((Get-Date) -lt $deadline) {
         $processError = $null
-        $exited = [PokerStarsLauncherProcessJob]::HasExited(
+        $exited = [PokerLauncherProcessJob]::HasExited(
             $handleId, $childProcessId, [ref]$exitCode, [ref]$processError
         )
         if (-not [string]::IsNullOrWhiteSpace($processError)) {
@@ -186,8 +186,8 @@ try {
     }
 }
 finally {
-    [PokerStarsLauncherProcessJob]::CloseProcessHandles()
-    [PokerStarsLauncherProcessJob]::CloseJob($job)
+    [PokerLauncherProcessJob]::CloseProcessHandles()
+    [PokerLauncherProcessJob]::CloseJob($job)
 }
 
 # Guard the uninstall contract: the app and shortcuts are removed, user data

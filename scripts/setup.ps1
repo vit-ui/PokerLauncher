@@ -2,7 +2,7 @@ $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 . (Join-Path $PSScriptRoot 'Configuration.ps1')
-$appDataRoot = Join-Path $env:APPDATA 'PokerStarsLauncher'
+$appDataRoot = Join-Path $env:APPDATA 'PokerLauncher'
 $configPath = Join-Path $appDataRoot 'config.json'
 $passwordPath = Join-Path $appDataRoot 'password.dpapi'
 

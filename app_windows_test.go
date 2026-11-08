@@ -17,7 +17,7 @@ import (
 
 func TestAlreadyRunningDialogExplainsNextStepWithoutOldFailures(t *testing.T) {
 	t.Setenv("LOCALAPPDATA", t.TempDir())
-	logDir := filepath.Join(os.Getenv("LOCALAPPDATA"), "PokerStarsLauncher", "logs")
+	logDir := filepath.Join(os.Getenv("LOCALAPPDATA"), "PokerLauncher", "logs")
 	if err := os.MkdirAll(logDir, 0755); err != nil {
 		t.Fatal(err)
 	}
@@ -30,7 +30,7 @@ func TestAlreadyRunningDialogExplainsNextStepWithoutOldFailures(t *testing.T) {
 	if title != "PokerStars is already running" || flags != mbOK|mbIconInformation {
 		t.Fatalf("expected an informational already-running dialog, got %q, flags %#x", title, flags)
 	}
-	for _, required := range []string{"Close PokerStars", "open PokerStars Launcher again", "current session has been left running"} {
+	for _, required := range []string{"Close PokerStars", "open PokerLauncher again", "current session has been left running"} {
 		if !strings.Contains(message, required) {
 			t.Errorf("dialog is missing %q: %s", required, message)
 		}
@@ -54,7 +54,7 @@ func TestFailureDialogsAreShortAndKeepDiagnosticsInLog(t *testing.T) {
 		{"The saved password cannot be decrypted. (launch.ps1 line 110)", "saved launcher settings need attention"},
 		{"Application 'C:\\PokerStars\\PokerStars.exe' exited unexpectedly with code 7.", "PokerStars could not finish starting"},
 		{"Application startup did not complete within 240 seconds.", "took too long"},
-		{"installing PokerStarsLauncher.exe: Access denied", "update could not be installed"},
+		{"installing PokerLauncher.exe: Access denied", "update could not be installed"},
 		{"refreshing application shortcuts and uninstall registration: register.ps1 failed: exit status 1", "shortcuts and Windows Apps entry"},
 		{"Unknown native exception at launch.ps1 line 133", "could not complete startup"},
 	}
@@ -70,7 +70,7 @@ func TestFailureDialogsAreShortAndKeepDiagnosticsInLog(t *testing.T) {
 		}
 		logApplicationError(errors.New(item.detail))
 	}
-	diagnostic, err := os.ReadFile(filepath.Join(os.Getenv("LOCALAPPDATA"), "PokerStarsLauncher", "logs", "application.log"))
+	diagnostic, err := os.ReadFile(filepath.Join(os.Getenv("LOCALAPPDATA"), "PokerLauncher", "logs", "application.log"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,11 +82,13 @@ func TestFailureDialogsAreShortAndKeepDiagnosticsInLog(t *testing.T) {
 }
 
 func TestUpgradeRefreshesRegistrationWithoutUninstall(t *testing.T) {
+	t.Setenv("APPDATA", t.TempDir())
+	t.Setenv("LOCALAPPDATA", t.TempDir())
 	installDir := filepath.Join(t.TempDir(), "installed app é")
 	if err := os.MkdirAll(installDir, 0755); err != nil {
 		t.Fatal(err)
 	}
-	for name, data := range map[string]string{"PokerStarsLauncher.exe": "old executable", "version.txt": "1.0.2"} {
+	for name, data := range map[string]string{"PokerLauncher.exe": "old executable", "version.txt": "1.0.2"} {
 		if err := os.WriteFile(filepath.Join(installDir, name), []byte(data), 0644); err != nil {
 			t.Fatal(err)
 		}
@@ -104,14 +106,15 @@ func TestUpgradeRefreshesRegistrationWithoutUninstall(t *testing.T) {
 	}
 	literal := func(value string) string { return "'" + strings.ReplaceAll(value, "'", "''") + "'" }
 	testID := t.TempDir()
-	testRegistry := `HKCU:\Software\PokerStarsLauncherTests\` + filepath.Base(filepath.Dir(testID)) + "-" + filepath.Base(testID)
+	testRegistry := `HKCU:\Software\PokerLauncherTests\` + filepath.Base(filepath.Dir(testID)) + "-" + filepath.Base(testID)
 	desktop := filepath.Join(installDir, "test desktop")
 	programs := filepath.Join(installDir, "test programs")
 	if err := os.MkdirAll(desktop, 0755); err != nil {
 		t.Fatal(err)
 	}
 	registration := string(source)
-	registration = strings.ReplaceAll(registration, `'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\PokerStarsLauncher'`, literal(testRegistry))
+	registration = strings.ReplaceAll(registration, `'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\PokerLauncher'`, literal(testRegistry))
+	registration = strings.ReplaceAll(registration, `'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\PokerStarsLauncher'`, literal(testRegistry+"-legacy"))
 	registration = strings.ReplaceAll(registration, `[Environment]::GetFolderPath('DesktopDirectory')`, literal(desktop))
 	registration = strings.ReplaceAll(registration, `[Environment]::GetFolderPath('Programs')`, literal(programs))
 	// Execute the real registration logic in an isolated registry key and
@@ -125,8 +128,8 @@ try {
     if ($entry.DisplayVersion -ne ` + literal(version) + `) { throw 'Windows Apps kept the old version.' }
     if (-not (Test-Path -LiteralPath (Join-Path $entry.InstallLocation ` + literal(proofName) + `) -PathType Leaf)) { throw "Incorrect installation registration: $($entry.InstallLocation)" }
     $shell = New-Object -ComObject WScript.Shell
-    $shortcut = $shell.CreateShortcut(` + literal(filepath.Join(desktop, "PokerStars Launcher.lnk")) + `)
-    if ([IO.Path]::GetFileName($shortcut.TargetPath) -ne 'PokerStarsLauncher.exe' -or
+    $shortcut = $shell.CreateShortcut(` + literal(filepath.Join(desktop, "PokerLauncher.lnk")) + `)
+    if ([IO.Path]::GetFileName($shortcut.TargetPath) -ne 'PokerLauncher.exe' -or
         -not (Test-Path -LiteralPath (Join-Path ([IO.Path]::GetDirectoryName($shortcut.TargetPath)) ` + literal(proofName) + `) -PathType Leaf) -or
         $shortcut.Arguments -ne '--launch') { throw "The launch shortcut was not refreshed: $($shortcut.TargetPath)" }
 }
@@ -162,7 +165,7 @@ func TestPowerShellExitStatusDistinguishesAlreadyRunningFromFailures(t *testing.
 func TestInstallAndUpdateExtractCurrentPackageAndPreserveUserData(t *testing.T) {
 	profile := filepath.Join(t.TempDir(), "profile")
 	t.Setenv("APPDATA", profile)
-	userData := filepath.Join(profile, "PokerStarsLauncher")
+	userData := filepath.Join(profile, "PokerLauncher")
 	if err := os.MkdirAll(userData, 0755); err != nil {
 		t.Fatal(err)
 	}
@@ -209,7 +212,7 @@ func TestInstallAndUpdateExtractCurrentPackageAndPreserveUserData(t *testing.T) 
 			if err != nil {
 				t.Fatal(err)
 			}
-			gotExe, err := os.ReadFile(filepath.Join(installDir, "PokerStarsLauncher.exe"))
+			gotExe, err := os.ReadFile(filepath.Join(installDir, "PokerLauncher.exe"))
 			if err != nil || !bytes.Equal(gotExe, wantExe) {
 				t.Fatalf("installed executable does not match the running package: %v", err)
 			}
@@ -225,7 +228,7 @@ func TestInstallAndUpdateExtractCurrentPackageAndPreserveUserData(t *testing.T) 
 			}
 		})
 		// The next installation must repair a stale script and replace an old EXE.
-		for _, path := range []string{"scripts/ProcessJob.ps1", "PokerStarsLauncher.exe", "version.txt"} {
+		for _, path := range []string{"scripts/ProcessJob.ps1", "PokerLauncher.exe", "version.txt"} {
 			if err := os.WriteFile(filepath.Join(installDir, filepath.FromSlash(path)), []byte("old version"), 0644); err != nil {
 				t.Fatal(err)
 			}

@@ -4,7 +4,7 @@
 # risking a missed short-lived parent process. On failure, TerminateJobObject
 # terminates all processes in this invocation while leaving unrelated apps
 # (including sessions that were already running) untouched.
-if (-not ('PokerStarsLauncherProcessJob' -as [type])) {
+if (-not ('PokerLauncherProcessJob' -as [type])) {
     Add-Type -TypeDefinition @'
 using System;
 using System.Collections.Generic;
@@ -13,7 +13,7 @@ using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
 
-public static class PokerStarsLauncherProcessJob {
+public static class PokerLauncherProcessJob {
     private const uint CREATE_SUSPENDED = 0x00000004;
     private const uint CREATE_NO_WINDOW = 0x08000000;
     private const uint STARTF_USESHOWWINDOW = 0x00000001;

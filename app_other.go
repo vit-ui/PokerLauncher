@@ -8,7 +8,7 @@ import (
 )
 
 func run() error {
-	return fmt.Errorf("PokerStarsLauncher is a Windows application")
+	return fmt.Errorf("PokerLauncher is a Windows application")
 }
 
 func showFatal(err error) { fmt.Fprintln(os.Stderr, err) }

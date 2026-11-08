@@ -46,7 +46,7 @@ function Start-UnownedTestApplication {
 
 function New-TestJob {
     $jobError = $null
-    $job = [PokerStarsLauncherProcessJob]::Create(('Local\PSL-test-' + [Guid]::NewGuid().ToString('N')), [ref]$jobError)
+    $job = [PokerLauncherProcessJob]::Create(('Local\PSL-test-' + [Guid]::NewGuid().ToString('N')), [ref]$jobError)
     Assert-True ($job -ne [IntPtr]::Zero) "Could not create test job: $jobError"
     $script:jobs += $job
     return $job
@@ -57,7 +57,7 @@ function Start-TestRoot {
     $childId = 0
     $handleId = 0
     $startError = $null
-    $started = [PokerStarsLauncherProcessJob]::StartProcess(
+    $started = [PokerLauncherProcessJob]::StartProcess(
         $Job, $script:testExe, $Arguments, $testRoot, $true,
         [ref]$childId, [ref]$handleId, [ref]$startError
     )
@@ -83,7 +83,7 @@ function Wait-TestRootExit {
     do {
         [uint32]$code = 0
         $processError = $null
-        $exited = [PokerStarsLauncherProcessJob]::HasExited($Root.ProcessHandleId, $Root.ProcessId, [ref]$code, [ref]$processError)
+        $exited = [PokerLauncherProcessJob]::HasExited($Root.ProcessHandleId, $Root.ProcessId, [ref]$code, [ref]$processError)
         Assert-True ([string]::IsNullOrEmpty($processError)) $processError
         if ($exited) {
             Assert-True ($code -eq $ExpectedExitCode) "Unexpected root exit code $code."
@@ -233,11 +233,11 @@ public static class PSLRuntimeFixture {
 
     # Termination must include descendants and preserve the unrelated app.
     $owned = @(Get-Process -Name PSLRuntimeApp -ErrorAction SilentlyContinue | Where-Object {
-        [PokerStarsLauncherProcessJob]::IsRunningInJob($delayedJob, $_, $appExe)
+        [PokerLauncherProcessJob]::IsRunningInJob($delayedJob, $_, $appExe)
     })
     Assert-True ($owned.Count -gt 0) 'Expected a live owned grandchild before cleanup.'
     $terminationError = $null
-    Assert-True ([PokerStarsLauncherProcessJob]::Terminate($delayedJob, [ref]$terminationError)) $terminationError
+    Assert-True ([PokerLauncherProcessJob]::Terminate($delayedJob, [ref]$terminationError)) $terminationError
     foreach ($child in $owned) {
         Assert-True ($child.WaitForExit(10000)) 'Owned grandchild survived job termination.'
         $child.Dispose()
@@ -265,7 +265,7 @@ public static class PSLRuntimeFixture {
         $caseRoot = Join-Path $testRoot ($scenario + '-' + [char]0x00E9)
         $scriptDir = Join-Path $caseRoot 'scripts'
         $appsDir = Join-Path $caseRoot 'apps'
-        $roaming = Join-Path $caseRoot 'roaming\PokerStarsLauncher'
+        $roaming = Join-Path $caseRoot 'roaming\PokerLauncher'
         New-Item -ItemType Directory -Path $scriptDir, (Join-Path $appsDir 'jre\bin'), $roaming -Force | Out-Null
         foreach ($appName in @('PokerStarsUpdate.exe', 'PokerStars.exe', 'xeester-update.exe', 'jre\bin\xeester.exe', 'StarsCaption.exe')) {
             Copy-Item -LiteralPath $testExe -Destination (Join-Path $appsDir $appName)
@@ -281,14 +281,14 @@ param([string]$RunStartedUtc, [string]$JobName, [string]$PokerStarsPath)
 $ErrorActionPreference = 'Stop'
 if (-not $RunStartedUtc -or -not $JobName -or -not $PokerStarsPath) { throw 'Missing login-helper arguments.' }
 . (Join-Path $PSScriptRoot 'ProcessJob.ps1')
-$job = [PokerStarsLauncherProcessJob]::OpenForQuery($JobName)
+$job = [PokerLauncherProcessJob]::OpenForQuery($JobName)
 $self = [Diagnostics.Process]::GetCurrentProcess()
 try {
-    if (-not [PokerStarsLauncherProcessJob]::IsRunningInJob($job, $self, $null)) { throw 'Login helper is not in the controller job.' }
+    if (-not [PokerLauncherProcessJob]::IsRunningInJob($job, $self, $null)) { throw 'Login helper is not in the controller job.' }
 }
-finally { $self.Dispose(); [PokerStarsLauncherProcessJob]::CloseJob($job) }
+finally { $self.Dispose(); [PokerLauncherProcessJob]::CloseJob($job) }
 if ($env:PSL_TEST_SCENARIO -in @('companion-close', 'pokerstars-close', 'all-close', 'pokerstars-crash')) {
-    $log = Join-Path $env:LOCALAPPDATA 'PokerStarsLauncher\logs\launcher.log'
+    $log = Join-Path $env:LOCALAPPDATA 'PokerLauncher\logs\launcher.log'
     $timer = [Diagnostics.Stopwatch]::StartNew()
     while (@(Select-String -LiteralPath $log -Pattern 'Confirmed application startup:').Count -lt 3) {
         if ($timer.Elapsed.TotalSeconds -gt 8) { throw 'Did not observe all fixture applications starting.' }
@@ -344,7 +344,7 @@ exit $LASTEXITCODE
         $controllerExit = $LASTEXITCODE
         $expectedExit = switch ($scenario) { { $_ -in @('success', 'already-running', 'companion-close', 'pokerstars-close', 'all-close') } { 0 }; { $_ -in @('start-failure', 'updater-failure') } { 3 }; default { 1 } }
         Assert-True ($controllerExit -eq $expectedExit) "Controller scenario '$scenario' returned $controllerExit`: $output"
-        $controllerLog = Get-Content -LiteralPath (Join-Path $caseRoot 'local\PokerStarsLauncher\logs\launcher.log') -Raw
+        $controllerLog = Get-Content -LiteralPath (Join-Path $caseRoot 'local\PokerLauncher\logs\launcher.log') -Raw
         if ($scenario -eq 'already-running') {
             Assert-True ($controllerLog -like '*Reusing application: PokerStars*') 'Already-running session was not recorded as an expected skipped launch.'
             Assert-True ($controllerLog -notlike '*LAUNCHER FAILURE*' -and $controllerLog -notlike '*Started PokerStars login helper*' -and $controllerLog -notlike '*terminated*') 'Already-running session must skip login and failure cleanup.'
@@ -422,10 +422,10 @@ finally {
     }
     foreach ($job in $jobs) {
         $ignored = $null
-        [void][PokerStarsLauncherProcessJob]::Terminate($job, [ref]$ignored)
-        [PokerStarsLauncherProcessJob]::CloseJob($job)
+        [void][PokerLauncherProcessJob]::Terminate($job, [ref]$ignored)
+        [PokerLauncherProcessJob]::CloseJob($job)
     }
-    [PokerStarsLauncherProcessJob]::CloseProcessHandles()
+    [PokerLauncherProcessJob]::CloseProcessHandles()
     if ($null -ne $outsideProcess) {
         if (-not $outsideProcess.HasExited) { $outsideProcess.Kill(); $outsideProcess.WaitForExit() }
         $outsideProcess.Dispose()

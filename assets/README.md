@@ -1,4 +1,4 @@
-`PokerStarsLauncher.ico` is the application icon used by the executable, Desktop and Start Menu shortcuts, and the Windows Apps entry.
+`PokerLauncher.ico` is the application icon used by the executable, Desktop and Start Menu shortcuts, and the Windows Apps entry.
 
 The Go executable embeds the entire `assets/` directory. The self-installing application extracts the ICO into its per-user installation directory for shortcut and uninstall registration.
 

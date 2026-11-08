@@ -1,9 +1,9 @@
 $ErrorActionPreference = 'Stop'
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).ProviderPath
-$appDataRoot = Join-Path $env:APPDATA 'PokerStarsLauncher'
+$appDataRoot = Join-Path $env:APPDATA 'PokerLauncher'
 $configPath = Join-Path $appDataRoot 'config.json'
-$logDirectory = Join-Path $env:LOCALAPPDATA 'PokerStarsLauncher\logs'
+$logDirectory = Join-Path $env:LOCALAPPDATA 'PokerLauncher\logs'
 $logPath = Join-Path $logDirectory 'launcher.log'
 $loginScript = Join-Path $PSScriptRoot 'PokerStarsLogin.ps1'
 $windowsPowerShell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
@@ -24,7 +24,7 @@ function Test-LauncherApplication {
     }
     [uint32]$rootExitCode = 0
     $rootError = $null
-    $rootExited = [PokerStarsLauncherProcessJob]::HasExited(
+    $rootExited = [PokerLauncherProcessJob]::HasExited(
         [int]$Root.ProcessHandleId, [int]$Root.ProcessId, [ref]$rootExitCode, [ref]$rootError
     )
     if (-not [string]::IsNullOrWhiteSpace($rootError)) { throw $rootError }
@@ -59,7 +59,7 @@ function Test-LauncherApplication {
     foreach ($candidate in @(Get-Process -Name $applicationName -ErrorAction SilentlyContinue)) {
         $retain = $false
         try {
-            if (-not $applicationRunning -and [PokerStarsLauncherProcessJob]::IsRunningInJob($Job, $candidate, $Root.ApplicationPath)) {
+            if (-not $applicationRunning -and [PokerLauncherProcessJob]::IsRunningInJob($Job, $candidate, $Root.ApplicationPath)) {
                 if ($null -ne $Root.ApplicationProcess) { $Root.ApplicationProcess.Dispose() }
                 $Root.ApplicationProcess = $candidate
                 $Root.ClosedNormally = $false
@@ -122,7 +122,7 @@ $loginProcessId = 0
 $failureMessage = $null
 $runStartedUtc = [DateTime]::UtcNow
 $runStartedUtcText = $runStartedUtc.ToString('o', [Globalization.CultureInfo]::InvariantCulture)
-$jobName = 'Local\PokerStarsLauncher-' + [Guid]::NewGuid().ToString('N')
+$jobName = 'Local\PokerLauncher-' + [Guid]::NewGuid().ToString('N')
 $startupTimer = [Diagnostics.Stopwatch]::StartNew()
 $startupTimeoutSeconds = 240
 
@@ -131,10 +131,7 @@ try {
     Remove-Item -LiteralPath (Join-Path $logDirectory 'login-error.txt') -Force -ErrorAction SilentlyContinue
     . (Join-Path $PSScriptRoot 'ProcessJob.ps1')
     if (-not (Test-Path -LiteralPath $configPath -PathType Leaf)) {
-        throw "Configuration not found: $configPath. Run Configure PokerStarsLauncher from the Start Menu first."
-    }
-    if (-not (Test-Path -LiteralPath $loginScript -PathType Leaf)) {
-        throw "PokerStars login helper not found: $loginScript"
+        throw "Configuration not found: $configPath. Run Configure PokerLauncher from the Start Menu first."
     }
     if (-not (Test-Path -LiteralPath $windowsPowerShell -PathType Leaf)) {
         throw "Windows PowerShell executable was not found: $windowsPowerShell"
@@ -148,6 +145,9 @@ try {
     $clientReused = Test-ApplicationRunning (Resolve-ProgramEntry $config.PokerClient).ApplicationPath
     $automaticLogin = $config.LoginMode -eq 'PokerStars' -and -not $clientReused
     if ($automaticLogin) {
+    if (-not (Test-Path -LiteralPath $loginScript -PathType Leaf)) {
+        throw "PokerStars login helper not found: $loginScript"
+    }
         $savedPassword = $null
         try {
             $savedPassword = ConvertTo-SecureString -String ([IO.File]::ReadAllText((Join-Path $appDataRoot 'password.dpapi')).Trim())
@@ -157,7 +157,7 @@ try {
     }
 
     $nativeError = $null
-    $jobHandle = [PokerStarsLauncherProcessJob]::Create($jobName, [ref]$nativeError)
+    $jobHandle = [PokerLauncherProcessJob]::Create($jobName, [ref]$nativeError)
     if ($jobHandle -eq [IntPtr]::Zero) {
         throw "Could not create the process job used for failure cleanup: $nativeError"
     }
@@ -172,7 +172,7 @@ try {
             $processId = 0; $processHandleId = 0
             if (-not $reused) {
                 Assert-ProgramFiles $item
-                $started = [PokerStarsLauncherProcessJob]::StartProcess(
+                $started = [PokerLauncherProcessJob]::StartProcess(
                     $jobHandle, $item.Path, $item.Arguments, $item.WorkingDirectory, $false,
                     [ref]$processId, [ref]$processHandleId, [ref]$nativeError
                 )
@@ -196,7 +196,7 @@ try {
     $loginArguments = '-NoLogo -NoProfile -STA -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $loginScript + '" -RunStartedUtc "' + $runStartedUtcText + '" -JobName "' + $jobName + '" -PokerStarsPath "' + $rootProcesses[0].ApplicationPath + '"'
     $loginProcessId = 0
     $loginProcessHandleId = 0
-    $loginStarted = [PokerStarsLauncherProcessJob]::StartProcess(
+    $loginStarted = [PokerLauncherProcessJob]::StartProcess(
         $jobHandle, $windowsPowerShell, $loginArguments, $repoRoot, $true,
         [ref]$loginProcessId, [ref]$loginProcessHandleId, [ref]$nativeError
     )
@@ -244,7 +244,7 @@ try {
             # Allow a short handoff to a replacement PokerStars process.
             if (($startupTimer.Elapsed.TotalSeconds - $pokerStarsClosedAt) -ge 1) {
                 $stopError = $null
-                if ($automaticLogin -and -not [PokerStarsLauncherProcessJob]::StopProcess($loginProcessHandleId, [ref]$stopError)) { throw $stopError }
+                if ($automaticLogin -and -not [PokerLauncherProcessJob]::StopProcess($loginProcessHandleId, [ref]$stopError)) { throw $stopError }
                 Write-LauncherLog 'Launch cancelled: PokerStars closed normally during startup. Login automation stopped; other applications were left alone.'
                 Remove-Item -LiteralPath (Join-Path $logDirectory 'login-error.txt') -Force -ErrorAction SilentlyContinue
                 $cancelled = $true
@@ -260,7 +260,7 @@ try {
         }
         [uint32]$loginExitCode = 0
         $loginError = $null
-        $loginExited = [PokerStarsLauncherProcessJob]::HasExited(
+        $loginExited = [PokerLauncherProcessJob]::HasExited(
             [int]$loginProcessHandleId, [int]$loginProcessId, [ref]$loginExitCode, [ref]$loginError
         )
         if (-not [string]::IsNullOrWhiteSpace($loginError)) { throw $loginError }
@@ -280,8 +280,8 @@ try {
         Write-LauncherLog 'Launcher completed successfully. Application startup and login submission were confirmed.'
         Write-Host 'Application startup completed.' -ForegroundColor Green
     }
-    [PokerStarsLauncherProcessJob]::CloseProcessHandles()
-    [PokerStarsLauncherProcessJob]::CloseJob($jobHandle)
+    [PokerLauncherProcessJob]::CloseProcessHandles()
+    [PokerLauncherProcessJob]::CloseJob($jobHandle)
     $jobHandle = [IntPtr]::Zero
     if ($helperFailures.Count -gt 0) {
         Write-LauncherLog ("Helper failures: " + ($helperFailures -join '; '))
@@ -302,15 +302,15 @@ catch {
 
     $cleanupError = $null
     if ($jobHandle -ne [IntPtr]::Zero) {
-        $terminated = [PokerStarsLauncherProcessJob]::Terminate($jobHandle, [ref]$cleanupError)
+        $terminated = [PokerLauncherProcessJob]::Terminate($jobHandle, [ref]$cleanupError)
         if ($terminated) {
             Write-LauncherLog 'Failure cleanup: Windows terminated the entire launcher process job.'
         }
         else {
             Write-LauncherLog "CRITICAL: $cleanupError"
         }
-        [PokerStarsLauncherProcessJob]::CloseProcessHandles()
-        [PokerStarsLauncherProcessJob]::CloseJob($jobHandle)
+        [PokerLauncherProcessJob]::CloseProcessHandles()
+        [PokerLauncherProcessJob]::CloseJob($jobHandle)
         $jobHandle = [IntPtr]::Zero
     }
 

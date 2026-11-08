@@ -5,7 +5,7 @@ import (
 	"os"
 )
 
-//go:generate go run github.com/akavel/rsrc@v0.10.2 -arch amd64 -ico assets/PokerStarsLauncher.ico -o rsrc_windows_amd64.syso
+//go:generate go run github.com/akavel/rsrc@v0.10.2 -arch amd64 -ico assets/PokerLauncher.ico -o rsrc_windows_amd64.syso
 
 // The application carries its PowerShell implementation and assets
 // inside the executable. Nothing from this directory is required at runtime

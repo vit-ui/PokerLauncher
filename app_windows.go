@@ -96,10 +96,13 @@ func run() error {
 		if err := installOrUpdate(installDir); err != nil {
 			return err
 		}
+		if err := runPowerShellInDirectory(installDir, "migrate.ps1"); err != nil {
+			return fmt.Errorf("migrating existing settings: %w", err)
+		}
 		if err := runPowerShellInDirectory(installDir, "register.ps1"); err != nil {
 			return fmt.Errorf("refreshing application shortcuts and uninstall registration: %w", err)
 		}
-		targetExe := filepath.Join(installDir, "PokerStarsLauncher.exe")
+		targetExe := filepath.Join(installDir, "PokerLauncher.exe")
 		sourceExe, err := os.Executable()
 		if err != nil {
 			return fmt.Errorf("locating the running executable: %w", err)
@@ -107,7 +110,7 @@ func run() error {
 		if !samePath(sourceExe, targetExe) {
 			if mode == "" {
 				if configExists() {
-					showMessage("PokerStarsLauncher updated", "Version "+version+" has been installed.\r\n\r\nUse the PokerStars Launcher shortcut when you're ready to start your applications.", mbOK|mbIconInformation)
+					showMessage("PokerLauncher updated", "Version "+version+" has been installed.\r\n\r\nUse the PokerLauncher shortcut when you're ready to start your applications.", mbOK|mbIconInformation)
 					return nil
 				} else {
 					mode = "--setup"
@@ -152,7 +155,7 @@ func installationDirectory() (string, error) {
 	if strings.TrimSpace(localAppData) == "" {
 		return "", fmt.Errorf("Windows did not provide LOCALAPPDATA for this user profile")
 	}
-	return filepath.Join(localAppData, "Programs", "PokerStarsLauncher"), nil
+	return filepath.Join(localAppData, "Programs", "PokerLauncher"), nil
 }
 
 func configExists() bool {
@@ -160,7 +163,7 @@ func configExists() bool {
 	if appData == "" {
 		return false
 	}
-	info, err := os.Stat(filepath.Join(appData, "PokerStarsLauncher", "config.json"))
+	info, err := os.Stat(filepath.Join(appData, "PokerLauncher", "config.json"))
 	return err == nil && !info.IsDir()
 }
 
@@ -174,10 +177,10 @@ func installOrUpdate(installDir string) error {
 		return fmt.Errorf("locating the running executable: %w", err)
 	}
 	sourceExe, _ = filepath.Abs(sourceExe)
-	targetExe := filepath.Join(installDir, "PokerStarsLauncher.exe")
+	targetExe := filepath.Join(installDir, "PokerLauncher.exe")
 	if !samePath(sourceExe, targetExe) {
 		if err := copyFileAtomically(sourceExe, targetExe); err != nil {
-			return fmt.Errorf("installing PokerStarsLauncher.exe: %w", err)
+			return fmt.Errorf("installing PokerLauncher.exe: %w", err)
 		}
 	}
 
@@ -229,7 +232,7 @@ func copyFileAtomically(source, destination string) error {
 	}
 	defer input.Close()
 
-	output, err := os.CreateTemp(filepath.Dir(destination), ".PokerStarsLauncher-*.tmp")
+	output, err := os.CreateTemp(filepath.Dir(destination), ".PokerLauncher-*.tmp")
 	if err != nil {
 		return err
 	}
@@ -274,7 +277,7 @@ func launchElevated() error {
 	}
 	if err := shellExecuteWait(executable, "--launch-elevated", filepath.Dir(executable), "runas"); err != nil {
 		if errors.Is(err, errorCancelled) {
-			showMessage("PokerStarsLauncher", "Administrator approval was cancelled. No applications were started.", mbOK|mbIconInformation)
+			showMessage("PokerLauncher", "Administrator approval was cancelled. No applications were started.", mbOK|mbIconInformation)
 			return nil
 		}
 		return fmt.Errorf("requesting administrator permission: %w", err)
@@ -452,10 +455,10 @@ func launchErrorDialog(err error) (string, string, uintptr) {
 	}
 	if errors.Is(err, errPokerStarsAlreadyRunning) {
 		return "PokerStars is already running",
-			"Close PokerStars when you're ready, then open PokerStars Launcher again.\r\n\r\nYour current session has been left running.",
+			"Close PokerStars when you're ready, then open PokerLauncher again.\r\n\r\nYour current session has been left running.",
 			mbOK | mbIconInformation
 	}
-	return "PokerStarsLauncher", formatLaunchError(err), mbOK | mbIconError
+	return "PokerLauncher", formatLaunchError(err), mbOK | mbIconError
 }
 
 func formatLaunchError(err error) string {
@@ -463,14 +466,14 @@ func formatLaunchError(err error) string {
 	if err != nil {
 		detail = err.Error()
 	}
-	setup := "Open Configure PokerStarsLauncher from the Start Menu, check your settings, and try again."
+	setup := "Open Configure PokerLauncher from the Start Menu, check your settings, and try again."
 	switch {
 	case strings.Contains(detail, "saved password"), strings.Contains(detail, "username is missing"),
 		strings.Contains(detail, "Configuration not found"), strings.Contains(detail, "Unsupported configuration"),
 		strings.Contains(detail, "Configured executable"):
 		return "Your saved launcher settings need attention.\r\n\r\n" + setup
-	case strings.Contains(detail, "installing PokerStarsLauncher.exe"):
-		return "The update could not be installed.\r\n\r\nClose any other PokerStarsLauncher windows and run the downloaded EXE again. Your poker applications can stay open."
+	case strings.Contains(detail, "installing PokerLauncher.exe"):
+		return "The update could not be installed.\r\n\r\nClose any other PokerLauncher windows and run the downloaded EXE again. Your poker applications can stay open."
 	case strings.Contains(detail, "registration"), strings.Contains(detail, "register.ps1"):
 		return "The installation could not finish updating its shortcuts and Windows Apps entry.\r\n\r\nRun the downloaded EXE again to repair the installation."
 	case strings.Contains(detail, "required application component is missing"), strings.Contains(detail, "login helper not found"):
@@ -499,7 +502,7 @@ func logApplicationError(err error) {
 	if err == nil || strings.TrimSpace(os.Getenv("LOCALAPPDATA")) == "" {
 		return
 	}
-	directory := filepath.Join(os.Getenv("LOCALAPPDATA"), "PokerStarsLauncher", "logs")
+	directory := filepath.Join(os.Getenv("LOCALAPPDATA"), "PokerLauncher", "logs")
 	if os.MkdirAll(directory, 0755) != nil {
 		return
 	}
@@ -513,7 +516,7 @@ func logApplicationError(err error) {
 
 func showFatal(err error) {
 	logApplicationError(err)
-	showMessage("PokerStarsLauncher", formatLaunchError(err), mbOK|mbIconError)
+	showMessage("PokerLauncher", formatLaunchError(err), mbOK|mbIconError)
 }
 
 func showMessage(title, message string, flags uintptr) {

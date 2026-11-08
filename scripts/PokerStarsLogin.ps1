@@ -14,9 +14,9 @@ param(
 $ErrorActionPreference = 'Stop'
 
 # Read the configured username and DPAPI password from the current Windows profile.
-$configFile = Join-Path $env:APPDATA 'PokerStarsLauncher\config.json'
-$passwordFile = Join-Path $env:APPDATA 'PokerStarsLauncher\password.dpapi'
-$logDirectory = Join-Path $env:LOCALAPPDATA 'PokerStarsLauncher\logs'
+$configFile = Join-Path $env:APPDATA 'PokerLauncher\config.json'
+$passwordFile = Join-Path $env:APPDATA 'PokerLauncher\password.dpapi'
+$logDirectory = Join-Path $env:LOCALAPPDATA 'PokerLauncher\logs'
 $logFile = Join-Path $logDirectory 'login.log'
 $errorFile = Join-Path $logDirectory 'login-error.txt'
 $loginFormTimeoutSeconds = 180
@@ -52,7 +52,7 @@ Write-LoginLog 'Submission target: parent dialog WM_COMMAND with BN_CLICKED, con
 try {
     if (-not [string]::IsNullOrWhiteSpace($JobName)) {
         . (Join-Path $PSScriptRoot 'ProcessJob.ps1')
-        $launcherJob = [PokerStarsLauncherProcessJob]::OpenForQuery($JobName)
+        $launcherJob = [PokerLauncherProcessJob]::OpenForQuery($JobName)
     }
     if (-not [string]::IsNullOrWhiteSpace($RunStartedUtc)) {
         $runStartedUtcParsed = [DateTime]::Parse(
@@ -63,12 +63,12 @@ try {
     }
 
     if (-not (Test-Path -LiteralPath $configFile -PathType Leaf)) {
-        throw "Configuration file not found: $configFile. Run PokerStarsLauncher setup from the Start Menu first."
+        throw "Configuration file not found: $configFile. Run PokerLauncher setup from the Start Menu first."
     }
     $config = Get-Content -LiteralPath $configFile -Raw -Encoding UTF8 | ConvertFrom-Json
     $username = [string]$config.PokerStarsUsername
     if ([string]::IsNullOrWhiteSpace($username)) {
-        throw 'PokerStars username is missing from the local configuration. Run Configure PokerStarsLauncher from the Start Menu again.'
+        throw 'PokerStars username is missing from the local configuration. Run Configure PokerLauncher from the Start Menu again.'
     }
 
     if (-not (Test-Path -LiteralPath $passwordFile -PathType Leaf)) {
@@ -495,7 +495,7 @@ public static class PokerStarsNativeLoginButtonV2 {
         $currentProcesses = @(Get-Process -Name 'PokerStars' -ErrorAction SilentlyContinue |
             Where-Object {
                 if ($launcherJob -ne [IntPtr]::Zero -and
-                    -not [PokerStarsLauncherProcessJob]::IsRunningInJob($launcherJob, $_, $PokerStarsPath)) { return $false }
+                    -not [PokerLauncherProcessJob]::IsRunningInJob($launcherJob, $_, $PokerStarsPath)) { return $false }
                 if ($_.MainWindowHandle -eq 0) { return $false }
                 if ($runStartedUtcParsed -eq [DateTime]::MinValue) { return $true }
                 try {
@@ -790,7 +790,7 @@ catch {
 }
 finally {
     if ($launcherJob -ne [IntPtr]::Zero) {
-        [PokerStarsLauncherProcessJob]::CloseJob($launcherJob)
+        [PokerLauncherProcessJob]::CloseJob($launcherJob)
     }
     if ($passwordBstr -ne [IntPtr]::Zero) {
         [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($passwordBstr)

@@ -62,10 +62,11 @@ function global:Assert-ProgramFiles {
     Assert-WindowsExecutable $Entry.ApplicationPath
     if (-not (Test-Path -LiteralPath $Entry.WorkingDirectory -PathType Container)) { throw "Working directory not found: $($Entry.WorkingDirectory)" }
     if ($PokerStars) {
+        if ([IO.Path]::GetFileName($Entry.Path) -notin @('PokerStars.exe', 'PokerStarsUpdate.exe')) { throw 'Select PokerStars.exe or PokerStarsUpdate.exe.' }
         foreach ($path in @($Entry.Path, $Entry.ApplicationPath)) {
             $info = [Diagnostics.FileVersionInfo]::GetVersionInfo($path)
             if (($info.ProductName + ' ' + $info.CompanyName) -notmatch '(?i)pokerstars|rational') { throw 'The selected client is not recognized as PokerStars (version metadata).' }
-            if ($info.OriginalFilename -notmatch '^(?i:PokerStars(Update)?\.exe)$') { throw 'Unsupported PokerStars executable identity.' }
+            if ($info.OriginalFilename -notmatch '^(?i:PokerStars(Update)?\.exe|Updater\.exe)$') { throw 'Unsupported PokerStars executable identity.' }
         }
         if ([IO.Path]::GetFileName($Entry.ApplicationPath) -ine 'PokerStars.exe' -or [IO.Path]::GetDirectoryName($Entry.Path) -ine [IO.Path]::GetDirectoryName($Entry.ApplicationPath)) { throw 'Select PokerStars.exe beside its PokerStars updater.' }
     }

@@ -8,13 +8,16 @@ import (
 func TestEmbeddedPowerShellComponents(t *testing.T) {
 	required := []string{
 		"scripts/setup.ps1",
+		"scripts/Configuration.ps1",
+		"scripts/migrate.ps1",
+		"scripts/retire-legacy.ps1",
 		"scripts/launch.ps1",
 		"scripts/ProcessJob.ps1",
 		"scripts/PokerStarsLogin.ps1",
 		"scripts/register.ps1",
 		"scripts/uninstall.ps1",
 		"assets/README.md",
-		"assets/PokerStarsLauncher.ico",
+		"assets/PokerLauncher.ico",
 	}
 	for _, name := range required {
 		if _, err := fs.Stat(embeddedResources, name); err != nil {
