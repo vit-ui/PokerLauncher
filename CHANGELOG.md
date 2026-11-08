@@ -2,6 +2,39 @@
 
 All notable changes to this project are documented here. Release Please updates this file from Conventional Commit messages.
 
+## [2.0.0](https://github.com/vit-ui/PokerLauncher/compare/v1.0.10...v2.0.0) (2026-11-08)
+
+
+### ⚠ BREAKING CHANGES
+
+* **repo:** the Go module path is now github.com/vit-ui/PokerLauncher. GitHub repository redirects preserve old links. Retain the previous UAC and native login verification record.
+* **release:** release downloads are now named PokerLauncher.exe. Preserve task commits and use Release Please to produce the next 2.x.x release; configuration and installation migration are documented.
+* **install:** installation identity, executable, shortcuts, and configuration storage move to PokerLauncher with schema version 2. Existing settings and DPAPI credentials migrate automatically; the old configuration is retained as a backup.
+* **launch:** helper failures now allow the session to continue, and existing poker sessions are reused instead of rejecting the launch.
+
+### Features
+
+* **config:** add generic program schema and PokerStars recognition ([52be4f6](https://github.com/vit-ui/PokerLauncher/commit/52be4f6da42bb41e88cc4937cd0d95f0fac40419))
+* **install:** rename to PokerLauncher and migrate legacy settings ([8fa44df](https://github.com/vit-ui/PokerLauncher/commit/8fa44df9431e39826e5704d251b53428362c0cc8))
+* **launch:** launch configurable helpers and reuse running applications ([a78d06b](https://github.com/vit-ui/PokerLauncher/commit/a78d06b42337d1fcfd1d03282f271ea1c062dfa6))
+* **settings:** manage poker client and an ordered helper list ([55fb8d8](https://github.com/vit-ui/PokerLauncher/commit/55fb8d839e070da240f4a2b32dc339cd395d67b4))
+
+
+### Bug Fixes
+
+* **ci:** clear expected migration failure exit status ([8fa5233](https://github.com/vit-ui/PokerLauncher/commit/8fa52332c618bbe8f8e813fc04ea57aaf11660ab))
+* **setup:** allow recovery after legacy migration fails ([5986cb1](https://github.com/vit-ui/PokerLauncher/commit/5986cb139cff4351d0b8ad0b2b38b36941072c6b))
+
+
+### Miscellaneous Chores
+
+* **repo:** align module and links with PokerLauncher repository ([c7ad1b4](https://github.com/vit-ui/PokerLauncher/commit/c7ad1b4c8d23ddc761d6a499fae30416c366fc25))
+
+
+### Build System
+
+* **release:** package PokerLauncher and document the 2.x transition ([1ef96dd](https://github.com/vit-ui/PokerLauncher/commit/1ef96dd099343cb9b3ca3790ddfd7224742d329c))
+
 ## [1.0.10](https://github.com/vit-ui/PokerStarsLauncher/compare/v1.0.9...v1.0.10) (2026-11-06)
 
 
