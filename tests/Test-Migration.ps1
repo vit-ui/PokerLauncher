@@ -31,5 +31,8 @@ try {
     & $powerShell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $script 2>&1 | Out-Null
     $ErrorActionPreference = 'Stop'
     if ($LASTEXITCODE -eq 0 -or (Test-Path -LiteralPath $newPath)) { throw 'Invalid credentials were migrated.' }
+    # The nonzero exit was expected and verified. GitHub's PowerShell wrapper
+    # propagates the global native exit code even after subsequent scripts pass.
+    $global:LASTEXITCODE = 0
     Write-Host 'Migration tests passed.'
 } finally { $env:APPDATA = $previous; Remove-Item -LiteralPath $testRoot -Recurse -Force -ErrorAction SilentlyContinue }
